@@ -1,0 +1,130 @@
+# ───── Carpetas/archivos que mencionaste ─────
+.spyproject/
+.venv/
+codigos antiguos/
+cosas varias/
+
+# ───── Python básico ─────
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales comunes
+.env/
+.venv*/
+venv*/
+ENV*/
+env*/
+
+# Paquetes / builds / distribución
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+wheels/
+pip-wheel-metadata/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Logs y bases temporales
+*.log
+*.sqlite
+*.sqlite3
+
+# Coverage / testing
+.coverage
+.coverage.*
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Type checkers / linters
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter / IPython
+.ipynb_checkpoints/
+.profile
+.ipython/
+
+# Herramientas de docs
+_site/
+doc/_build/
+docs/_build/
+
+# Dependencias y gestores
+pip-log.txt
+pip-delete-this-directory.txt
+poetry.lock
+pdm.lock
+Pipfile.lock
+
+# ───── IDEs / editores ─────
+# VS Code
+.vscode/
+
+# PyCharm / IntelliJ
+.idea/
+
+# Spyder
+.spyproject/
+
+# Visual Studio (si lo usas para Python)
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Otros editores
+*.swp
+*.swo
+
+# ───── Sistema operativo ─────
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# ───── Variables de entorno / secretos ─────
+.env
+.env.*
+*.env
+*.key
+*.pem
+
+# ───── Opcional: grandes binarios (si usas LFS, déjalos fuera) ─────
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.mp4
+*.mp3
+*.wav
+*.pdf
+*.h5
+*.pth
+*.pt
+*.onnx

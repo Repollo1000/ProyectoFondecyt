@@ -1,0 +1,10 @@
+* text=auto
+
+# Fuerza LF para código y datos
+*.py   text eol=lf
+*.csv  text eol=lf
+
+# Scripts Windows con CRLF
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
