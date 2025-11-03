@@ -2,9 +2,8 @@
 from __future__ import annotations
 import numpy as np
 from prettytable import PrettyTable
-import modulo5 as m5  # Agregar import faltante
-
-
+from . import modulo5 as m5
+import os  # <-- 1. IMPORTADO 'os' PARA MANEJAR RUTAS
 
 def tabla_subsidio(info_subsidio, regiones):
     """Muestra tabla con información de subsidios aplicados."""
@@ -233,7 +232,18 @@ def main():
     
     # 2) Ejecutar modelo
     print("\nCargando datos y ejecutando modelo...")
-    resultados = m5.correr_modelo("../Datos/costoAño.xlsx", variables)
+
+    # --- INICIO DE CORRECCIÓN DE RUTA ---
+    # 2.A) Obtener la ruta del directorio 'Parte1' (que es el padre de 'modulo5')
+    #      __file__ es la ruta de este script (main.py)
+    BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    
+    # 2.B) Construir la ruta completa al archivo de datos
+    ruta_costos = os.path.join(BASE_DIR, 'Datos', 'costoAño.xlsx')
+    
+    # 2.C) Usar la ruta robusta
+    resultados = m5.correr_modelo(ruta_costos, variables)
+    # --- FIN DE CORRECCIÓN ---
     
     regiones = resultados["regiones"]
     info_subsidio = resultados["info_subsidio"]

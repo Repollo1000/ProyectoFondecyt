@@ -13,7 +13,7 @@ from pathlib import Path
 
 from prettytable import PrettyTable, SINGLE_BORDER
 # Importar el módulo como paquete
-from Parte1.modulo7 import modulo7 as m7
+from . import modulo7 as m7  # <-- 1. CORRECCIÓN: Añadido un punto "."
 
 # ----------------------------
 # Parámetros del modelo

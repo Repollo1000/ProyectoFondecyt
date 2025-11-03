@@ -4,8 +4,12 @@ import os
 import numpy as np
 from prettytable import PrettyTable
 
-from Parte1.modulo5 import modulo5 as m5     # usa sstc_temporal (3, T)
-from Parte1.modulo8 import modulo8 as m8     # actualizado: trabaja en años
+# --- INICIO DE CORRECCIÓN DE IMPORTACIÓN ---
+# 1. Importa 'modulo5' subiendo un nivel (..) al directorio 'Parte1' y luego entrando a 'modulo5'
+from ..modulo5 import modulo5 as m5
+# 2. Importa 'modulo8' desde el directorio actual (.)
+from . import modulo8 as m8
+# --- FIN DE CORRECCIÓN ---
 
 
 # ----------------------------
@@ -67,7 +71,7 @@ def imprimir_ecuaciones_fraction_exponential(years, beta, PB_series, frac_series
 
 
 def main():
-    # --- Rutas robustas
+    # --- Rutas robustas (ESTO YA ESTABA CORRECTO)
     base_dir = os.path.dirname(os.path.dirname(__file__))  # .../Parte1
     ruta_costos  = os.path.join(base_dir, "Datos", "costoAño.xlsx")
     ruta_savings = os.path.join(base_dir, "Datos", "annual_savings.xlsx")  # serie anual

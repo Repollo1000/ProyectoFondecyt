@@ -5,12 +5,12 @@ from prettytable import PrettyTable
 import sys
 import os
 
-# Agregar path para importar modulo5
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-# Importar módulos
-from modulo5 import modulo5 as m5
-from modulo10 import modulo10 as m10
+# --- INICIO DE CORRECCIÓN DE IMPORTACIÓN ---
+# 1. Ya no se necesita el 'sys.path.insert'
+# 2. Usamos importaciones relativas
+from ..modulo5 import modulo5 as m5  # '..' sube un nivel (a Parte1) y entra a modulo5
+from . import modulo10 as m10       # '.' importa desde el paquete actual (modulo10)
+# --- FIN DE CORRECCIÓN ---
 
 
 def main():
@@ -18,6 +18,15 @@ def main():
     print("MODELO INTEGRADO: LCOE (Módulo 5) + BALANCE ENERGÉTICO (Módulo 10)")
     print("=" * 80)
     
+    # --- INICIO DE CORRECCIÓN DE RUTAS ---
+    # 1. Definir la ruta base al directorio 'Parte1'
+    #    (__file__ es 'main_mod10.py', .parent es 'modulo10', .parent.parent es 'Parte1')
+    BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    
+    # 2. Definir la ruta a la carpeta de Datos
+    DATOS_DIR = os.path.join(BASE_DIR, 'Datos')
+    # --- FIN DE CORRECCIÓN DE RUTAS ---
+
     # ==========================================
     # PASO 1: EJECUTAR MÓDULO 5 (LCOE)
     # ==========================================
@@ -26,7 +35,9 @@ def main():
     variables_m5 = m5.default_variables()
     variables_m5["use_dynamic_subsidy"] = False
     
-    resultados_m5 = m5.correr_modelo("../Datos/costoAño.xlsx", variables_m5)
+    # 3. Usar la ruta robusta
+    ruta_costo_excel = os.path.join(DATOS_DIR, "costoAño.xlsx")
+    resultados_m5 = m5.correr_modelo(ruta_costo_excel, variables_m5)
     
     regiones = resultados_m5["regiones"]
     sstc = resultados_m5["sstc_mensual"]
@@ -46,11 +57,11 @@ def main():
     variables_balance = m10.default_variables_balance()
     variables_balance["usar_perfil_horario"] = False  # Método simple 60/40
     
-    # Rutas a CSVs
+    # 4. Usar rutas robustas para los CSVs
     ruta_csvs = {
-        "Norte": "../Datos/Antofagasta.csv",
-        "Centro": "../Datos/Santiago.csv",
-        "Sur": "../Datos/Puerto montt.csv"
+        "Norte": os.path.join(DATOS_DIR, "Antofagasta.csv"),
+        "Centro": os.path.join(DATOS_DIR, "Santiago.csv"),
+        "Sur": os.path.join(DATOS_DIR, "Puerto montt.csv")
     }
     
     resultados_completos = m10.correr_modelo_completo(

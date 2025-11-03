@@ -11,7 +11,10 @@ import numpy as np
 import pandas as pd
 
 # Importa modulo5 oficial (retorna sstc_temporal)
-from Parte1.modulo5 import modulo5 as m5
+# --- INICIO DE CORRECCIÓN ---
+# 1. Se usa '..' para subir un nivel (de 'modulo8' a 'Parte1') y luego entrar a 'modulo5'
+from ..modulo5 import modulo5 as m5
+# --- FIN DE CORRECCIÓN ---
 
 # Regiones del modelo
 REGIONES = m5.REGIONES  # ("Norte", "Centro", "Sur")
@@ -67,11 +70,31 @@ def get_subsidized_costs_vector(ruta_excel_costos: str,
     """
     res = m5.correr_modelo(ruta_excel_costos, variables)
     if "sstc_temporal" not in res:
-        raise KeyError("El resultado de correr_modelo no contiene 'sstc_temporal'.")
-    sstc_temporal = np.asarray(res["sstc_temporal"], dtype=float)  # (3, T)
-    if not (0 <= t_index < sstc_temporal.shape[1]):
-        raise IndexError(f"t_index={t_index} fuera de rango [0, {sstc_temporal.shape[1]-1}]")
-    return sstc_temporal[:, t_index]  # (3,)
+        # CORRECCIÓN: El 'correr_modelo' original (en modulo5.py) devuelve 'sstc_mensual'.
+        # Si este código espera 'sstc_temporal', puede que estés usando una versión
+        # de modulo5.py que no es la que me has pasado. 
+        # Voy a asumir que la clave es 'sstc_mensual' como en el modulo5.py que vi.
+        if "sstc_mensual" not in res:
+             raise KeyError("El resultado de correr_modelo no contiene 'sstc_mensual' ni 'sstc_temporal'.")
+        # Si la clave es 'sstc_mensual', la usamos
+        sstc_temporal = np.asarray(res["sstc_mensual"], dtype=float) # (3, T_meses)
+        
+        # --- Lógica para convertir SSTC mensual a anual ---
+        # Asumimos que quieres el SSTC al final del año (índice 11, 23, 35...)
+        # t_index aquí significa AÑO, no mes.
+        
+        mes_index = (t_index + 1) * 12 - 1 # t_index=0 -> mes 11
+        
+        if not (0 <= mes_index < sstc_temporal.shape[1]):
+             raise IndexError(f"Índice de año t_index={t_index} (mes {mes_index}) fuera de rango [0, {sstc_temporal.shape[1]-1}]")
+        return sstc_temporal[:, mes_index] # (3,)
+        
+    else:
+        # Si 'sstc_temporal' SÍ existe, se usa la lógica original
+        sstc_temporal = np.asarray(res["sstc_temporal"], dtype=float)  # (3, T_años)
+        if not (0 <= t_index < sstc_temporal.shape[1]):
+            raise IndexError(f"t_index={t_index} fuera de rango [0, {sstc_temporal.shape[1]-1}]")
+        return sstc_temporal[:, t_index]  # (3,)
 
 
 def get_subsidized_costs_series(ruta_excel_costos: str,
@@ -81,8 +104,20 @@ def get_subsidized_costs_series(ruta_excel_costos: str,
     """
     res = m5.correr_modelo(ruta_excel_costos, variables)
     if "sstc_temporal" not in res:
-        raise KeyError("El resultado de correr_modelo no contiene 'sstc_temporal'.")
-    return np.asarray(res["sstc_temporal"], dtype=float)  # (3, T)
+        # Misma corrección/lógica que en la función anterior
+        if "sstc_mensual" not in res:
+             raise KeyError("El resultado de correr_modelo no contiene 'sstc_mensual' ni 'sstc_temporal'.")
+        
+        sstc_mensual = np.asarray(res["sstc_mensual"], dtype=float) # (3, T_meses)
+        n_meses = sstc_mensual.shape[1]
+        n_anios = n_meses // 12
+        
+        # Tomar el valor del SSTC del último mes de cada año
+        indices_anuales = np.arange(1, n_anios + 1) * 12 - 1
+        return sstc_mensual[:, indices_anuales] # (3, T_años)
+    else:
+        # Si 'sstc_temporal' SÍ existe, se usa la lógica original
+        return np.asarray(res["sstc_temporal"], dtype=float)  # (3, T_años)
 
 
 # ----------------------------
@@ -123,11 +158,18 @@ def payback_years_series(subsidized_costs: np.ndarray,
     C = np.asarray(subsidized_costs, dtype=float)
     if C.ndim == 1:
         C = C[:, None]  # (3,1) → broadcast a (3,T)
-    if C.shape != S.shape and not (C.shape[1] == 1 or S.shape[1] == 1):
-        raise ValueError(f"Formas incompatibles: C={C.shape}, S={S.shape}")
+    
+    # Asegurarse de que las formas sean compatibles para la división
+    # Si S es (3, T_s) y C es (3, T_c), tomar el mínimo de T_s y T_c
+    if C.shape[1] != S.shape[1] and C.shape[1] > 1:
+        T = min(C.shape[1], S.shape[1])
+        C = C[:, :T]
+        S = S[:, :T]
+
     out = np.full_like(S, np.nan, dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
         np.divide(C, S, out=out, where=(S > 0))
+    
     mask = ~(S > 0)
     if zero_mode == "inf":
         out[mask] = np.inf
