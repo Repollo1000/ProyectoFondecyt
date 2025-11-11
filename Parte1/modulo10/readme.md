@@ -37,7 +37,7 @@ df_consumo_horario = pd.read_excel(ruta_consumo)
 # Perfil de generación
 ruta_generacion = os.path.join(DATOS_DIR, NOMBRE_ARCHIVO_GENERACION_HORARIO)
 df_generacion_horario = pd.read_csv(ruta_generacion, sep=';', encoding='latin-1')
-
+```
 
 ## 🧮 Cálculo
 
