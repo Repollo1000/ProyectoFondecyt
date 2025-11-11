@@ -284,5 +284,5 @@ __all__ = [
     "calcular_energia_mensual",
     "calcular_lcoe_mensual",
     "subsidy_from_difference",
-    "aplicar_subsidio_dinamMico",
+    "aplicar_subsidio_dinamico",
 ]
