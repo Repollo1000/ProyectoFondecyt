@@ -10,24 +10,38 @@ import os
 # ============================
 REGIONES = ("Norte", "Centro", "Sur")
 
-# Mapeo de archivos CSV por región
-CSV_FILES = {
-    "Norte": "Antofagasta.csv",
-    "Centro": "Santiago.csv",
-    "Sur": "Puerto montt.csv"
+# Columnas esperadas en los archivos Excel de perfiles
+# (basado en tus imágenes: image_a34e54.png, image_a3bad8.png)
+COLUMNAS_CONSUMO = {
+    "Norte": "consumo_norte",
+    "Centro": "consumo_centro",
+    "Sur": "consumo_sur"
 }
 
+# --- ¡¡AQUÍ ESTÁ LA CORRECCIÓN DE NOMBRES DE COLUMNA!! ---
+# Apuntamos a las columnas del archivo Factor_capacidad_solar.csv
+COLUMNAS_GENERACION = {
+    "Norte": "factor_antofagasta",
+    "Centro": "factor_santiago",
+    "Sur": "factor_puertomontt"
+}
+# ==========================================
 
 # ============================
 # VARIABLES POR DEFECTO
 # ============================
 def default_variables_balance() -> Dict:
-    """Variables por defecto para el balance energético."""
+    """
+    Variables por defecto para el balance energético.
+    Estos valores se usan si main_mod10.py no los sobrescribe.
+    ¡¡OJO: Estos precios están en USD!!
+    """
     return {
         # Consumo mensual promedio por hogar [kWh/mes]
         "consumo_mensual_hogar": np.array([250.0, 240.0, 230.0], dtype=float),  # Norte, Centro, Sur
         
-        # Tarifas [$/kWh]
+        # Tarifas [$/kWh] (Valores en USD por defecto)
+        # Este 'tarifa_netbilling' es el default si NO se carga el Excel
         "tarifa_netbilling": np.array([0.08, 0.09, 0.085], dtype=float),  # Precio inyección a red
         "precio_electricidad": np.array([0.12, 0.13, 0.125], dtype=float),  # Precio compra red
         
@@ -38,61 +52,56 @@ def default_variables_balance() -> Dict:
 
 
 # ============================
-# CARGA DE DATOS HORARIOS
+# PROCESAMIENTO DE PERFILES
 # ============================
-def cargar_datos_horarios(ruta_csv: str, region: str) -> pd.DataFrame:
-    """
-    Carga los datos horarios desde CSV.
-    
-    Returns:
-        DataFrame con datos horarios
-    """
-    try:
-        df = pd.read_csv(ruta_csv)
-        print(f"✓ Cargado {os.path.basename(ruta_csv)} para región {region}: {len(df)} registros")
-        print(f"  Columnas: {list(df.columns)}")
-        return df
-    except Exception as e:
-        print(f"✗ Error cargando {ruta_csv}: {e}")
-        return pd.DataFrame()
 
+def _procesar_perfil(df: pd.DataFrame, columnas_regiones: Dict[str, str]) -> Dict[str, np.ndarray]:
+    """
+    Función interna para procesar DataFrames de perfiles horarios.
+    Convierte el DF (mes, hora, region1, region2, ...) 
+    en un dict de {region: np.array[12, 24]}
+    """
+    perfiles_por_region = {}
+    
+    # Normalizar nombres de columnas (minúsculas, sin espacios)
+    df.columns = df.columns.str.lower().str.strip()
+    
+    # Asumimos que las columnas 'mes' y 'hora' existen
+    
+    for region, nombre_columna in columnas_regiones.items():
+        nombre_columna_norm = nombre_columna.lower().strip()
+        
+        if nombre_columna_norm not in df.columns:
+            print(f"✗ ADVERTENCIA: No se encontró la columna '{nombre_columna_norm}' para {region}.")
+            # Retornar un perfil uniforme si falla
+            perfiles_por_region[region] = np.ones((12, 24), dtype=float) / 24.0
+            continue
+        
+        # Agrupar por mes y hora, promediar el valor
+        # Asumimos horas 1-24 y mes 1-12
+        try:
+            # Los CSV pueden tener hora 0-23 o 1-24. 
+            # El archivo Factor_capacidad_solar.csv tiene hora 0-23
+            perfil = df.groupby(['mes', 'hora'])[nombre_columna_norm].mean().unstack(fill_value=0)
+            
+            # Reindexar para asegurar 12 meses (1-12) y 24 horas (0-23)
+            perfil = perfil.reindex(index=range(1, 13), columns=range(0, 24), fill_value=0)
 
-def calcular_perfil_horario_consumo(df: pd.DataFrame) -> np.ndarray:
-    """
-    Calcula perfil horario normalizado de consumo (%).
-    
-    Returns:
-        np.ndarray (12, 24): [mes, hora] con porcentajes que suman 1.0 por mes
-    """
-    # TODO: Adaptar según columnas reales del CSV
-    # Por ahora retorna distribución uniforme
-    perfil = np.ones((12, 24), dtype=float) / 24.0
-    return perfil
+        except KeyError:
+             print(f"✗ ERROR: Faltan columnas 'mes' o 'hora' en el archivo de perfil.")
+             perfiles_por_region[region] = np.ones((12, 24), dtype=float) / 24.0
+             continue
 
-
-def calcular_capacity_factor_horario(df: pd.DataFrame) -> np.ndarray:
-    """
-    Calcula capacity factor horario desde datos CSV.
+        # Normalizar por fila (mes) para que sume 1.0
+        suma_mensual = perfil.sum(axis=1)
+        suma_mensual[suma_mensual == 0] = 1.0 # Evitar división por cero
+        
+        perfil_normalizado = perfil.div(suma_mensual, axis=0)
+        
+        # Guardar como array numpy (se accede por [0-11, 0-23])
+        perfiles_por_region[region] = perfil_normalizado.values 
     
-    Returns:
-        np.ndarray (12, 24): [mes, hora] con CF horario normalizado
-    """
-    # TODO: Adaptar según columnas reales del CSV
-    # Por ahora retorna perfil solar típico
-    perfil = np.zeros((12, 24), dtype=float)
-    for mes in range(12):
-        for hora in range(24):
-            if 6 <= hora <= 18:  # Horas de sol
-                # Curva gaussiana centrada en hora 12
-                perfil[mes, hora] = np.exp(-((hora - 12) ** 2) / 18.0)
-    
-    # Normalizar para que la suma diaria sea 1.0
-    for mes in range(12):
-        suma = np.sum(perfil[mes, :])
-        if suma > 0:
-            perfil[mes, :] /= suma
-    
-    return perfil
+    return perfiles_por_region
 
 
 # ============================
@@ -107,37 +116,23 @@ def balance_energetico_horario(
 ) -> Tuple[float, float]:
     """
     Calcula balance energético hora a hora para un mes específico.
-    
-    Args:
-        consumo_mensual: Consumo total del mes [kWh]
-        generacion_mensual: Generación total del mes [kWh]
-        perfil_consumo: Perfil horario de consumo normalizado (12, 24)
-        cf_horario: Capacity factor horario normalizado (12, 24)
-        mes: Mes (0-11)
-    
-    Returns:
-        (autoconsumo_mes, inyeccion_mes) en kWh
     """
     autoconsumo_total = 0.0
     inyeccion_total = 0.0
     
-    # Días del mes (simplificado: 30 días)
-    dias_mes = 30
-    
-    for hora in range(24):
-        # Consumo horario promedio por hora [kWh]
+    for hora in range(24): # Horas 0-23
+        
+        # Consumo horario [kWh] = (Total mes) * (Porcentaje de esa hora)
         consumo_hora = consumo_mensual * perfil_consumo[mes, hora]
         
-        # Generación horaria promedio por hora [kWh]
+        # Generación horaria [kWh] = (Total mes) * (Porcentaje de esa hora)
         generacion_hora = generacion_mensual * cf_horario[mes, hora]
         
         # Balance
         if generacion_hora >= consumo_hora:
-            # Autogenero todo mi consumo
             autoconsumo_total += consumo_hora
             inyeccion_total += (generacion_hora - consumo_hora)
         else:
-            # Autogenero solo lo que puedo
             autoconsumo_total += generacion_hora
             # No hay inyección
     
@@ -150,13 +145,6 @@ def balance_energetico_simple(
 ) -> Tuple[float, float]:
     """
     Balance simplificado (método Felipe: 60% autoconsumo, 40% inyección).
-    
-    Args:
-        generacion_mensual: Generación total del mes [kWh]
-        porcentaje_autoconsumo: % que se autoconsumo (default 60%)
-    
-    Returns:
-        (autoconsumo_mes, inyeccion_mes) en kWh
     """
     autoconsumo = generacion_mensual * porcentaje_autoconsumo
     inyeccion = generacion_mensual * (1.0 - porcentaje_autoconsumo)
@@ -171,26 +159,23 @@ def calcular_ahorro_mensual(
     inyeccion: float,
     lcoe: float,
     precio_electricidad: float,
-    tarifa_netbilling: float
+    tarifa_inyeccion: float # <-- Parámetro clave que cambiará
 ) -> Dict[str, float]:
     """
     Calcula el ahorro mensual por balance energético.
+    Todas las monedas deben ser consistentes (ej. USD).
     
-    Ahorro = Inyección × Tarifa_NetBilling 
-           + Autoconsumo × (Precio_Electricidad - LCOE)
+    Ahorro = Ahorro por Inyección + Ahorro por Autoconsumo
     
-    Args:
-        autoconsumo: Energía autoconsumida [kWh]
-        inyeccion: Energía inyectada a red [kWh]
-        lcoe: Costo nivelado de energía [$/kWh]
-        precio_electricidad: Precio de compra de red [$/kWh]
-        tarifa_netbilling: Precio de venta a red [$/kWh]
-    
-    Returns:
-        Dict con desglose de ahorro
+    Ahorro por Inyección = Inyección × Tarifa_Inyeccion
+    Ahorro por Autoconsumo = Autoconsumo × (Precio_Electricidad - LCOE)
     """
-    ahorro_inyeccion = inyeccion * tarifa_netbilling
+    # Esta es la tarifa que cambia según la política
+    ahorro_inyeccion = inyeccion * tarifa_inyeccion 
+    
+    # El ahorro por autoconsumo es lo que evito comprar menos lo que me costó generarlo
     ahorro_autoconsumo = autoconsumo * (precio_electricidad - lcoe)
+    
     ahorro_total = ahorro_inyeccion + ahorro_autoconsumo
     
     return {
@@ -209,39 +194,48 @@ def calcular_balance_energetico(
     energia_mensual: np.ndarray,  # (3, N_meses) del módulo 5
     lcoe_mensual: np.ndarray,     # (3, N_meses) del módulo 5
     variables_balance: Dict,
-    ruta_csvs: Optional[Dict[str, str]] = None
+    df_consumo_horario: Optional[pd.DataFrame] = None,
+    df_generacion_horario: Optional[pd.DataFrame] = None,
+    politica: str = "Net Billing" # <--- NUEVO PARÁMETRO
 ) -> Dict:
     """
-    Calcula el balance energético completo para todas las regiones.
-    
-    Args:
-        energia_mensual: Generación solar por región y mes (3, N_meses)
-        lcoe_mensual: LCOE por región y mes (3, N_meses)
-        variables_balance: Variables de configuración
-        ruta_csvs: Dict con rutas a CSVs por región (opcional)
-    
-    Returns:
-        Dict con resultados del balance energético
+    Calcula el balance energético completo para todas las regiones
+    basado en la política de inyección especificada.
     """
     N_meses = energia_mensual.shape[1]
     
     # Variables
-    consumo_mensual = np.asarray(variables_balance["consumo_mensual_hogar"], dtype=float)
-    tarifa_nb = np.asarray(variables_balance["tarifa_netbilling"], dtype=float)
+    consumo_mensual_hogar = np.asarray(variables_balance["consumo_mensual_hogar"], dtype=float)
+    # Tarifa de inyección para Net Billing (cargada del Excel)
+    tarifa_netbilling_base = np.asarray(variables_balance["tarifa_netbilling"], dtype=float) 
+    # Precio de compra de electricidad
     precio_elec = np.asarray(variables_balance["precio_electricidad"], dtype=float)
+    
     usar_horario = variables_balance.get("usar_perfil_horario", False)
     
-    # Cargar datos horarios si están disponibles
+    # Cargar perfiles horarios
     perfiles_consumo = {}
     cf_horarios = {}
     
-    if usar_horario and ruta_csvs is not None:
-        for i, region in enumerate(REGIONES):
-            if region in ruta_csvs:
-                df = cargar_datos_horarios(ruta_csvs[region], region)
-                if not df.empty:
-                    perfiles_consumo[region] = calcular_perfil_horario_consumo(df)
-                    cf_horarios[region] = calcular_capacity_factor_horario(df)
+    if usar_horario:
+        if df_consumo_horario is not None and df_generacion_horario is not None:
+            print("Modo Balance Horario activado. Procesando perfiles...")
+            
+            # Procesar DF de Consumo -> {region: array[12,24]}
+            perfiles_consumo = _procesar_perfil(df_consumo_horario, COLUMNAS_CONSUMO)
+            print("✓ Perfiles de consumo procesados.")
+            
+            # Procesar DF de Generación -> {region: array[12,24]}
+            cf_horarios = _procesar_perfil(df_generacion_horario, COLUMNAS_GENERACION)
+            print("✓ Perfiles de generación procesados.")
+            
+        else:
+            print("ADVERTENCIA: 'usar_perfil_horario' es True, pero no se proveyeron DataFrames de perfiles.")
+            usar_horario = False # Forzar modo simple
+    
+    if not usar_horario:
+        print("Usando Modo Balance Simple (60/40).")
+
     
     # Inicializar matrices de resultados
     autoconsumo_mat = np.zeros((3, N_meses), dtype=float)
@@ -255,15 +249,16 @@ def calcular_balance_energetico(
         for m in range(N_meses):
             generacion = energia_mensual[i, m]
             lcoe = lcoe_mensual[i, m]
-            consumo = consumo_mensual[i]
+            consumo = consumo_mensual_hogar[i] 
             
-            # Balance (horario o simple)
-            if usar_horario and region in perfiles_consumo:
+            # 1. CALCULAR BALANCE (Autoconsumo vs Inyección)
+            if usar_horario and region in perfiles_consumo and region in cf_horarios:
                 mes_año = m % 12  # Mes del año (0-11)
+                
                 autoconsumo, inyeccion = balance_energetico_horario(
                     consumo, generacion,
-                    perfiles_consumo[region],
-                    cf_horarios[region],
+                    perfiles_consumo[region], # Array (12, 24)
+                    cf_horarios[region],     # Array (12, 24)
                     mes_año
                 )
             else:
@@ -271,12 +266,34 @@ def calcular_balance_energetico(
                 pct = variables_balance.get("porcentaje_autoconsumo_simple", 0.60)
                 autoconsumo, inyeccion = balance_energetico_simple(generacion, pct)
             
-            # Calcular ahorro
+            
+            # 2. DEFINIR TARIFA DE INYECCIÓN SEGÚN POLÍTICA
+            precio_elec_regional = precio_elec[i]
+            
+            if politica == "Net Billing":
+                # Usa la tarifa de inyección cargada del Excel
+                tarifa_inyeccion = tarifa_netbilling_base[i] 
+            elif politica == "Net Metering":
+                # Tarifa = 100% del precio de electricidad
+                tarifa_inyeccion = precio_elec_regional
+            elif politica == "Feed-in Tariff":
+                # Tarifa = 80% del precio de electricidad (supuesto del doc)
+                tarifa_inyeccion = precio_elec_regional * 0.8
+            else:
+                # Caso por defecto: Net Billing
+                tarifa_inyeccion = tarifa_netbilling_base[i]
+            
+            
+            # 3. CALCULAR AHORRO
             resultado_ahorro = calcular_ahorro_mensual(
-                autoconsumo, inyeccion,
-                lcoe, precio_elec[i], tarifa_nb[i]
+                autoconsumo,
+                inyeccion,
+                lcoe,
+                precio_elec_regional,
+                tarifa_inyeccion # <-- Tarifa variable según política
             )
             
+            # Guardar resultados
             autoconsumo_mat[i, m] = autoconsumo
             inyeccion_mat[i, m] = inyeccion
             ahorro_mat[i, m] = resultado_ahorro["ahorro_total"]
@@ -284,12 +301,13 @@ def calcular_balance_energetico(
             ahorro_autoconsumo_mat[i, m] = resultado_ahorro["ahorro_autoconsumo"]
     
     return {
-        "autoconsumo_mensual": autoconsumo_mat,  # (3, N_meses) kWh
-        "inyeccion_mensual": inyeccion_mat,      # (3, N_meses) kWh
-        "ahorro_mensual": ahorro_mat,            # (3, N_meses) USD
+        "autoconsumo_mensual": autoconsumo_mat,
+        "inyeccion_mensual": inyeccion_mat,
+        "ahorro_mensual": ahorro_mat, # <--- Este es el resultado que cambia
         "ahorro_inyeccion": ahorro_inyeccion_mat,
         "ahorro_autoconsumo": ahorro_autoconsumo_mat,
-        "variables": variables_balance
+        "variables": variables_balance,
+        "politica_ejecutada": politica
     }
 
 
@@ -299,18 +317,12 @@ def calcular_balance_energetico(
 def correr_modelo_completo(
     resultados_m5: Dict,
     variables_balance: Optional[Dict] = None,
-    ruta_csvs: Optional[Dict[str, str]] = None
+    df_consumo_horario: Optional[pd.DataFrame] = None,
+    df_generacion_horario: Optional[pd.DataFrame] = None,
+    politica: str = "Net Billing" # <--- NUEVO PARÁMETRO
 ) -> Dict:
     """
     Integra el balance energético con los resultados del módulo 5.
-    
-    Args:
-        resultados_m5: Resultados de modulo5.correr_modelo()
-        variables_balance: Variables de balance (usa defaults si None)
-        ruta_csvs: Rutas a CSVs por región
-    
-    Returns:
-        Dict con resultados completos (módulo 5 + balance energético)
     """
     if variables_balance is None:
         variables_balance = default_variables_balance()
@@ -319,12 +331,14 @@ def correr_modelo_completo(
     energia_mensual = resultados_m5["energia_mensual"]
     lcoe_mensual = resultados_m5["lcoe_mensual"]
     
-    # Calcular balance
+    # Calcular balance, pasando la política
     balance = calcular_balance_energetico(
         energia_mensual,
         lcoe_mensual,
         variables_balance,
-        ruta_csvs
+        df_consumo_horario,
+        df_generacion_horario,
+        politica # <--- Pasa la política
     )
     
     # Combinar resultados
@@ -340,9 +354,8 @@ def correr_modelo_completo(
 __all__ = [
     "default_variables_balance",
     "calcular_balance_energetico",
-    "calcular_ahorro_mensual",
+    "calcular_ahorro_mensual", # <--- Mantenemos esta función
     "balance_energetico_horario",
     "balance_energetico_simple",
     "correr_modelo_completo",
-    "cargar_datos_horarios",
 ]
