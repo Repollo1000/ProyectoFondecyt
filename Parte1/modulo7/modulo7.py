@@ -82,7 +82,7 @@ def ode_system(
     willing = dpf_vec_current * able # Usa el valor interpolado/actual
 
     # ------------------------------------------------------------
-    # Tasa de adopción (Bass-like):
+    # Tasa de adopción:
     # ------------------------------------------------------------
     M    = adopters_of_pv_systems + potential_adopters_of_pv_systems
     frac = _safe_ratio(adopters_of_pv_systems, M)
