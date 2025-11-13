@@ -1,20 +1,21 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*
 from __future__ import annotations
 import numpy as np
-import pandas as pd  # <--- IMPORTANTE: Asegúrate de tener pandas (pip install pandas openpyxl)
-from prettytable import PrettyTable
+import pandas as pd
+from prettytable import PrettyTable, SINGLE_BORDER
 import sys
 import os
 
 # --- INICIO DE CORRECCIÓN DE IMPORTACIÓN ---
 from ..modulo5 import modulo5 as m5
 from . import modulo10 as m10
+from .. import parametros_globales as p_g # Importamos parámetros globales
 # --- FIN DE CORRECCIÓN ---
 
 # ==========================================
 # CONFIGURACIÓN DE PRECIOS Y MONEDA
 # ==========================================
-# ¡¡IMPORTANTE!! Define la tasa de cambio correcta
+# Se mantiene la tasa de cambio como referencia (aunque LCOE ya está en CLP)
 TASA_CAMBIO_CLP_A_USD = 900.0 
 
 # ¡¡IMPORTANTE!! Nombres de tus archivos de datos (deben estar en la carpeta 'Datos')
@@ -22,11 +23,14 @@ NOMBRE_ARCHIVO_PRECIOS = "precio_electricidad_vf.xlsx"
 NOMBRE_ARCHIVO_CONSUMO_HORARIO = "curva_de_carga.xlsx"        
 NOMBRE_ARCHIVO_GENERACION_HORARIO = "Factor_capacidad_solar.csv" 
 
-# Nombres de columnas para el Excel de precios (según tu último error)
+# Nombres de columnas para el Excel de precios
 COLUMNA_PRECIO_COMPRA = "low1"        
 COLUMNA_PRECIO_INYECCION = "low2"     
 # ==========================================
 
+# --- CONSTANTE PARA CONTROLAR LA SALIDA ANUAL ---
+N_YEARS_TO_PRINT = 5 
+# ------------------------------------------------
 
 def main():
     print("=" * 80)
@@ -41,19 +45,26 @@ def main():
     # ==========================================
     print("\n[1/2] Ejecutando Módulo 5 - LCOE...")
     
+    # --- CORRECCIÓN: USAMOS LAS VARIABLES Y CONSTANTES GLOBALES ---
     variables_m5 = m5.default_variables()
     variables_m5["use_dynamic_subsidy"] = False
     
+    # Sincronizamos la vida útil y PVGP con los valores globales
+    variables_m5["project_lifetime_months"] = p_g.PROJECT_LIFETIME_MONTHS 
+    variables_m5["pvgp_kW_per_household"] = p_g.MOD7_VARIABLES_INICIALES["pvgp_kW_per_household"]
+
     ruta_costo_excel = os.path.join(DATOS_DIR, "costoAño.xlsx")
     resultados_m5 = m5.correr_modelo(ruta_costo_excel, variables_m5)
     
     regiones = resultados_m5["regiones"]
-    lcoe = resultados_m5["lcoe_mensual"] # LCOE ya está en USD
+    
+    # AJUSTE: El LCOE se usa directamente en CLP (asumido)
+    lcoe = resultados_m5["lcoe_mensual"] 
     
     N_meses = lcoe.shape[1]
     N_años = N_meses // 12
     
-    print(f"✓ Módulo 5 completado: {N_meses} meses ({N_años} años)")
+    print(f"✓ Módulo 5 completado: {N_meses} meses ({N_años} años). LCOE asumido en CLP.")
     
     # ==========================================
     # PASO 2: CARGAR DATOS DE BALANCE - Se hace UNA VEZ
@@ -66,25 +77,17 @@ def main():
         print(f"Cargando precios desde {NOMBRE_ARCHIVO_PRECIOS}...")
         ruta_precios = os.path.join(DATOS_DIR, NOMBRE_ARCHIVO_PRECIOS)
         
-        # Leemos el Excel de precios
         df_precios = pd.read_excel(ruta_precios)
         
-        # Normalizar TODOS los nombres de columnas (minúsculas, sin espacios)
-        print(f"   Columnas originales leídas: {list(df_precios.columns)}")
         df_precios.columns = df_precios.columns.str.lower().str.strip()
-        print(f"   Columnas normalizadas: {list(df_precios.columns)}")
         
-        # Nuestros nombres de columna objetivo (ahora 'low1' y 'low2')
         target_compra = COLUMNA_PRECIO_COMPRA.lower().strip()
         target_inyeccion = COLUMNA_PRECIO_INYECCION.lower().strip()
         
-        # Extraer usando los nombres normalizados
         precios_compra_clp = df_precios[target_compra].values
         precios_inyeccion_clp = df_precios[target_inyeccion].values
         
-        precios_compra_usd = precios_compra_clp / TASA_CAMBIO_CLP_A_USD
-        precios_inyeccion_usd = precios_inyeccion_clp / TASA_CAMBIO_CLP_A_USD
-        print(f"✓ Precios cargados y convertidos a USD (Tasa: {TASA_CAMBIO_CLP_A_USD})")
+        print(f"✓ Precios cargados directamente en CLP.")
 
         # 2. Cargar Perfil de Consumo Horario
         print(f"Cargando perfiles de consumo desde {NOMBRE_ARCHIVO_CONSUMO_HORARIO}...")
@@ -96,24 +99,20 @@ def main():
         print(f"Cargando perfiles de generación desde {NOMBRE_ARCHIVO_GENERACION_HORARIO}...")
         ruta_generacion = os.path.join(DATOS_DIR, NOMBRE_ARCHIVO_GENERACION_HORARIO)
         
-        # --- ¡¡AQUÍ ESTÁ LA CORRECCIÓN DE ENCODING!! ---
-        # Leemos el CSV usando 'latin-1' (o 'iso-8859-1') por el caracter 'ñ' en 'año'
         df_generacion_horario = pd.read_csv(ruta_generacion, sep=';', encoding='latin-1') 
         print(f"✓ Perfil de generación cargado.")
 
     except Exception as e:
-        print(f"✗ ERROR: No se pudo cargar un archivo de datos.")
-        print(f"   Detalle: {e}") 
-        print("   Asegúrate de que los nombres de archivo y columnas en main_mod10.py sean correctos.")
+        print(f"✗ ERROR: No se pudo cargar un archivo de datos. Detalle: {e}") 
         print("   Abortando ejecución.")
-        return # Salir del script
+        return 
 
     # --- Configuración de Variables de Balance ---
     variables_balance = m10.default_variables_balance()
     
-    # Sobrescribir precios con los valores en USD
-    variables_balance["precio_electricidad"] = precios_compra_usd
-    variables_balance["tarifa_netbilling"] = precios_inyeccion_usd # Esta es la tarifa base de Net Billing
+    # Sobrescribir precios con los valores en CLP
+    variables_balance["precio_electricidad"] = precios_compra_clp
+    variables_balance["tarifa_netbilling"] = precios_inyeccion_clp 
 
     # *** ACTIVAR BALANCE HORARIO ***
     variables_balance["usar_perfil_horario"] = True 
@@ -127,9 +126,9 @@ def main():
         print("\n" + "=" * 80)
         print("PASO 3: SELECCIONE LA POLÍTICA A CALCULAR")
         print("=" * 80)
-        print("1. Net Billing (Tarifa de inyección según Excel)")
-        print("2. Net Metering (Tarifa = 100% precio de compra)")
-        print("3. Feed-in Tariff (Tarifa = 80% precio de compra)")
+        print("1. Net Billing (50% precio de compra)")
+        print("2. Net Metering (100% precio de compra)")
+        print("3. Feed-in Tariff (80% precio de compra)")
         print("\n" + "=" * 80)
         
         choice = input("Ingrese el número (1, 2, o 3) de la política a ejecutar: ")
@@ -145,30 +144,27 @@ def main():
 
     
     # ==========================================
-    # PASO 4: EJECUTAR SIMULACIÓN (para la política elegida)
+    # PASO 4: EJECUTAR SIMULACIÓN
     # ==========================================
     
     print("\n" + "=" * 80)
     print(f"EJECUTANDO SIMULACIÓN PARA POLÍTICA: {politica_seleccionada.upper()}")
     print("=" * 80)
 
-    # --- Ejecución del Modelo Completo ---
     resultados_completos = m10.correr_modelo_completo(
         resultados_m5,
         variables_balance,
         df_consumo_horario,
         df_generacion_horario,
-        politica=politica_seleccionada  # <--- Pasa la política elegida
+        politica=politica_seleccionada
     )
     
-    # Extraer resultados
     energia = resultados_completos["energia_mensual"]
     lcoe = resultados_completos["lcoe_mensual"]
-    
     balance = resultados_completos["balance_energetico"]
     autoconsumo = balance["autoconsumo_mensual"]
     inyeccion = balance["inyeccion_mensual"]
-    ahorro = balance["ahorro_mensual"] # El módulo 10 calcula el 'ahorro'
+    ahorro = balance["ahorro_mensual"]
     
     print(f"✓ Módulo 10 completado para {politica_seleccionada}")
     
@@ -178,10 +174,11 @@ def main():
     
     # 1) LCOE (primeros 12 meses)
     print("\n" + "=" * 80)
-    print(f"LCOE MENSUAL [USD/kWh] - Primeros 12 meses (Tasa USD: {TASA_CAMBIO_CLP_A_USD})")
+    print(f"LCOE MENSUAL [CLP/kWh] - Primeros 12 meses")
     print("=" * 80)
     
     t_lcoe = PrettyTable()
+    t_lcoe.set_style(SINGLE_BORDER)
     t_lcoe.field_names = ["Mes"] + list(regiones)
     
     for m in range(min(12, lcoe.shape[1])):
@@ -196,7 +193,8 @@ def main():
     print("=" * 80)
     
     t_balance = PrettyTable()
-    t_balance.field_names = ["Mes", "Región", "Gen [kWh]", "Autoc [kWh]", "Inyec [kWh]", "Ahorro [USD]"]
+    t_balance.set_style(SINGLE_BORDER)
+    t_balance.field_names = ["Mes", "Región", "Gen [kWh]", "Autoc [kWh]", "Inyec [kWh]", "Ahorro [CLP]"]
     
     for m in range(min(12, autoconsumo.shape[1])):
         for i, reg in enumerate(regiones):
@@ -206,34 +204,44 @@ def main():
                 f"{energia[i, m]:,.1f}",
                 f"{autoconsumo[i, m]:,.1f}",
                 f"{inyeccion[i, m]:,.1f}",
-                f"${ahorro[i, m]:,.2f}"
+                f"${ahorro[i, m]:,.0f}"
             ])
     
     print(t_balance)
     
-    # 3) Resumen Anual (Año 1)
+    # 3) Resumen Anual (Primeros N_YEARS_TO_PRINT años)
+    
+    N_años_disponibles = N_meses // 12
+    N_años_a_mostrar = min(N_YEARS_TO_PRINT, N_años_disponibles)
+
     print("\n" + "=" * 80)
-    print(f"RESUMEN ANUAL ({politica_seleccionada}) - Año 1")
+    print(f"RESUMEN ANUAL ({politica_seleccionada}) - Primeros {N_años_a_mostrar} Años")
     print("=" * 80)
     
     t_anual = PrettyTable()
-    t_anual.field_names = ["Región", "Gen Total", "Autoc Total", "Inyec Total", "Ahorro Total [USD]", "LCOE Prom [USD]"]
+    t_anual.set_style(SINGLE_BORDER)
+    t_anual.field_names = ["Año", "Región", "Gen Total", "Autoc Total", "Inyec Total", "Ahorro Total [CLP]", "LCOE Prom [CLP]"]
     
-    for i, reg in enumerate(regiones):
-        gen_anual = np.sum(energia[i, :12])
-        autoc_anual = np.sum(autoconsumo[i, :12])
-        inyec_anual = np.sum(inyeccion[i, :12])
-        ahorro_anual = np.sum(ahorro[i, :12])
-        lcoe_prom = np.mean(lcoe[i, :12])
+    for a in range(N_años_a_mostrar): 
+        start_month = a * 12
+        end_month = start_month + 12
         
-        t_anual.add_row([
-            reg,
-            f"{gen_anual:,.1f} kWh",
-            f"{autoc_anual:,.1f} kWh",
-            f"{inyec_anual:,.1f} kWh",
-            f"${ahorro_anual:,.2f}",
-            f"{lcoe_prom:.4f}"
-        ])
+        for i, reg in enumerate(regiones):
+            gen_anual = np.sum(energia[i, start_month:end_month])
+            autoc_anual = np.sum(autoconsumo[i, start_month:end_month])
+            inyec_anual = np.sum(inyeccion[i, start_month:end_month])
+            ahorro_anual = np.sum(ahorro[i, start_month:end_month])
+            lcoe_prom = np.mean(lcoe[i, start_month:end_month])
+            
+            t_anual.add_row([
+                a + 1,
+                reg,
+                f"{gen_anual:,.1f} kWh",
+                f"{autoc_anual:,.1f} kWh",
+                f"{inyec_anual:,.1f} kWh",
+                f"${ahorro_anual:,.0f}",
+                f"{lcoe_prom:.4f}"
+            ])
     
     print(t_anual)
     
@@ -243,7 +251,8 @@ def main():
     print("=" * 80)
     
     t_stats = PrettyTable()
-    t_stats.field_names = ["Región", "Ahorro Total [USD]", "Ahorro Prom/mes [USD]", "LCOE Min", "LCOE Max", "LCOE Prom"]
+    t_stats.set_style(SINGLE_BORDER)
+    t_stats.field_names = ["Región", "Ahorro Total [CLP]", "Ahorro Prom/mes [CLP]", "LCOE Min", "LCOE Max", "LCOE Prom"]
     
     for i, reg in enumerate(regiones):
         ahorro_total = np.sum(ahorro[i, :])
@@ -254,8 +263,8 @@ def main():
         
         t_stats.add_row([
             reg,
-            f"${ahorro_total:,.2f}",
-            f"${ahorro_prom:,.2f}",
+            f"${ahorro_total:,.0f}",
+            f"${ahorro_prom:,.0f}",
             f"{lcoe_min:.4f}",
             f"{lcoe_max:.4f}",
             f"{lcoe_prom:.4f}"
