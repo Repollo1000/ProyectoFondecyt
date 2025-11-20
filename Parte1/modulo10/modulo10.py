@@ -4,7 +4,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
-# Importamos parámetros globales si existen, si no, definimos regiones por defecto
+# Importamos parámetros globales si existen
 try:
     from .. import parametros_globales as p_g
     REGIONES = list(p_g.REGIONES)
@@ -15,21 +15,18 @@ except (ImportError, AttributeError):
 # CONSTANTES BÁSICAS
 # ============================
 
-# Columnas de factor de capacidad en Factor_capacidad_solar.csv
 COLUMNAS_FACTOR = {
     "Norte": "factor_antofagasta",
     "Centro": "factor_santiago",
     "Sur": "factor_puertomontt",
 }
 
-# Columnas de demanda en curva_de_carga.xlsx
 COLUMNAS_DEMANDA = {
     "Norte": "demanda_norte",
     "Centro": "demanda_centro",
     "Sur": "demanda_sur",
 }
 
-# Prefijos para nombres de columnas resultantes
 PREFIJOS_REGION = {
     "Norte": "norte",
     "Centro": "centro",
@@ -38,7 +35,7 @@ PREFIJOS_REGION = {
 
 
 # ============================
-# CONSTRUCCIÓN DF HORARIO COMBINADO
+# 1. CONSTRUCCIÓN DF HORARIO
 # ============================
 def construir_dataframe_horario_combinado(
     df_generacion: pd.DataFrame,
@@ -46,58 +43,46 @@ def construir_dataframe_horario_combinado(
     pvgp_kW_per_household: np.ndarray,
 ) -> pd.DataFrame:
     """
-    Une Factor_capacidad_solar y curva_de_carga en un solo DataFrame horario.
-    CORRECCIÓN: Se asume correspondencia fila a fila (pd.concat) para evitar
-    producto cartesiano si se usara merge por mes/hora.
+    Une Factor Solar y Curva de Carga fila a fila (concat).
     """
-
-    # 1. Copias de seguridad y normalización de columnas
+    # Copias y limpieza
     df_g = df_generacion.copy()
     df_c = df_consumo.copy()
 
     df_g.columns = df_g.columns.str.lower().str.strip()
     df_c.columns = df_c.columns.str.lower().str.strip()
 
-    # 2. Reset de índices para asegurar pegado correcto
     df_g = df_g.reset_index(drop=True)
     df_c = df_c.reset_index(drop=True)
 
-    # Verificación de longitud
-    if len(df_g) != len(df_c):
-        print(f"⚠️ ADVERTENCIA: Los archivos tienen distinta longitud ({len(df_g)} vs {len(df_c)}).")
-        print("Se unirán por posición. Las filas sobrantes quedarán con NaN.")
-
-    # 3. Eliminamos columnas repetidas del segundo DF (mes, hora, año)
+    # Eliminar columnas repetidas
     cols_to_drop = [col for col in ["año", "mes", "hora"] if col in df_c.columns]
     df_c_limpio = df_c.drop(columns=cols_to_drop)
 
-    # 4. Unimos (Concatenación horizontal)
+    # Unión
     df = pd.concat([df_g, df_c_limpio], axis=1)
 
-    # 5. Calculamos generación (Factor * Potencia Instalada)
+    # Cálculo de Generación (Factor * Potencia)
     df_result = df.copy()
-
     for idx, region in enumerate(REGIONES):
-        pref = PREFIJOS_REGION[region]
         col_factor = COLUMNAS_FACTOR[region].lower()
-        col_gen = f"gen_{pref}"
+        col_gen = f"gen_{PREFIJOS_REGION[region]}"
 
         if col_factor not in df_result.columns:
-            # Intentamos buscarla sin lower por si acaso
-            raise KeyError(f"No se encontró la columna '{col_factor}' en el archivo de generación.")
+            raise KeyError(f"No se encontró la columna '{col_factor}'")
 
-        pvgp = float(pvgp_kW_per_household[idx])  # kW por hogar
+        pvgp = float(pvgp_kW_per_household[idx])
         df_result[col_gen] = df_result[col_factor] * pvgp
 
     return df_result
 
 
 # ============================
-# BALANCE HORA A HORA (DF)
+# 2. BALANCE FÍSICO HORA A HORA
 # ============================
 def calcular_balance_horario_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calcula: Autoconsumo, Inyección y Demanda de Red para cada hora.
+    Calcula: Autoconsumo, Inyección y Demanda de Red.
     """
     df_result = df.copy()
 
@@ -111,14 +96,13 @@ def calcular_balance_horario_df(df: pd.DataFrame) -> pd.DataFrame:
         col_inyec = f"inyeccion_{pref}"
         col_red = f"demanda_red_{pref}"
 
-        # Diferencia neta (Positivo = Sobra energía, Negativo = Falta)
+        # Diferencia (Gen - Demanda)
         diff = df_result[col_gen] - df_result[col_dem]
         df_result[col_diff] = diff
         
-        # Lógica vectorizada (numpy where):
-        # Si diff >= 0 (Sobra): Autoconsumo = Demanda, Inyección = diff, Red = 0
-        # Si diff < 0 (Falta): Autoconsumo = Generación, Inyección = 0, Red = -diff
-        
+        # Lógica:
+        # diff >= 0 -> Sobra energía (Inyección)
+        # diff < 0  -> Falta energía (Compra Red)
         df_result[col_autoc] = np.where(diff >= 0, df_result[col_dem], df_result[col_gen])
         df_result[col_inyec] = np.where(diff >= 0, diff, 0.0)
         df_result[col_red]   = np.where(diff < 0, -diff, 0.0)
@@ -127,26 +111,24 @@ def calcular_balance_horario_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================
-# RESUMEN MENSUAL
+# 3. RESUMEN MENSUAL FÍSICO
 # ============================
 def resumir_balance_mensual_df(df_balance: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     """
-    Suma las 720/744 horas de cada mes para obtener el balance mensual.
+    Suma las horas para obtener totales mensuales (kWh).
     """
     resultados = {}
-
     for region in REGIONES:
         pref = PREFIJOS_REGION[region]
-        col_dem = COLUMNAS_DEMANDA[region].lower()
         col_gen = f"gen_{pref}"
-        col_diff = f"diff_{pref}"
+        col_dem = COLUMNAS_DEMANDA[region].lower()
         col_autoc = f"autoc_{pref}"
         col_inyec = f"inyeccion_{pref}"
         col_red = f"demanda_red_{pref}"
+        col_diff = f"diff_{pref}"
 
         df_reg = df_balance[["mes", col_gen, col_dem, col_autoc, col_inyec, col_red, col_diff]].copy()
 
-        # Agrupar por mes y sumar
         df_mensual = (
             df_reg
             .groupby("mes")
@@ -164,3 +146,50 @@ def resumir_balance_mensual_df(df_balance: pd.DataFrame) -> Dict[str, pd.DataFra
         resultados[region] = df_mensual
 
     return resultados
+
+
+# ============================
+# 4. CÁLCULO ECONÓMICO COMPARATIVO (UTILIDAD)
+# ============================
+def calcular_flujo_economico_completo(
+    df_balance_mensual: pd.DataFrame,
+    df_precios: pd.DataFrame,
+    col_precio_usd: str = "mediumUSD"
+) -> pd.DataFrame:
+    """
+    Calcula la utilidad (Cash Flow mensual) bajo 3 políticas:
+    1. Net Billing (Inyección al 50%)
+    2. Net Metering (Inyección al 100%)
+    3. Feed-in Tariff (Inyección al 80% - Supuesto)
+    """
+    df = df_balance_mensual.copy()
+    
+    # Mapeo de Precios
+    dict_precios = df_precios.set_index('periodo')[col_precio_usd].to_dict()
+    df['precio_usd_kwh'] = df.index.map(dict_precios)
+    
+    # --- COSTOS (Igual para todos) ---
+    # Siempre pagas lo que sacas de la red a precio full
+    df['costo_compra_usd'] = df['demanda_red'] * df['precio_usd_kwh']
+    
+    # --- INGRESOS POR POLÍTICA ---
+    
+    # 1. Net Billing (50%)
+    df['ingreso_nb'] = df['inyeccion'] * df['precio_usd_kwh'] * 0.5
+    df['utilidad_nb'] = df['ingreso_nb'] - df['costo_compra_usd']
+    
+    # 2. Net Metering (100%)
+    df['ingreso_nm'] = df['inyeccion'] * df['precio_usd_kwh'] * 1.0
+    df['utilidad_nm'] = df['ingreso_nm'] - df['costo_compra_usd']
+    
+    # 3. Feed-in Tariff (80% - Supuesto)
+    df['ingreso_fit'] = df['inyeccion'] * df['precio_usd_kwh'] * 0.8
+    df['utilidad_fit'] = df['ingreso_fit'] - df['costo_compra_usd']
+    
+    return df
+
+__all__ = [
+    "REGIONES", "COLUMNAS_FACTOR", "COLUMNAS_DEMANDA", "PREFIJOS_REGION",
+    "construir_dataframe_horario_combinado", "calcular_balance_horario_df",
+    "resumir_balance_mensual_df", "calcular_flujo_economico_completo"
+]

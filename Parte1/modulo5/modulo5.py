@@ -14,8 +14,6 @@ from .. import parametros_globales as p_g
 # ============================
 DIFF_TABLE = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 1.0], dtype=float)
 SUB_TABLE  = np.array([0.30, 0.29, 0.25, 0.18, 0.10, 0.04, 0.02, 0.00, 0.00], dtype=float)
-# REGIONES se elimina de aquí y se importa de p_g
-# --------------------------------------------------------------------------------------------------
 
 
 # ============================
@@ -95,7 +93,7 @@ def calcular_sstc_mensual(
     r_m = tasa_mensual(np.asarray(variables["rtasa"], dtype=float))
     subs = np.asarray(variables["Percentage_capital_subsidy"], dtype=float)
     
-    # Nombres de columnas
+    # Nombres de columnas (Normalizados)
     inv_cols = ["Costo _inversion_norte", "Costo _inversion_centro", "Costo _inversion_sur"]
     aoc_cols = ["Costo _operacion_norte", "Costo _operacion_centro", "Costo _operacion_sur"]
     
@@ -111,8 +109,13 @@ def calcular_sstc_mensual(
         N = N_max 
     
     # Extraer costos anuales (3, T_años)
-    inv_años = datos[inv_cols].to_numpy(dtype=float).T
-    aoc_años = datos[aoc_cols].to_numpy(dtype=float).T
+    # Aseguramos que las columnas existan tras la limpieza
+    try:
+        inv_años = datos[inv_cols].to_numpy(dtype=float).T
+        aoc_años = datos[aoc_cols].to_numpy(dtype=float).T
+    except KeyError as e:
+        print(f"ERROR [MODULO5]: No se encontraron las columnas de costos esperadas. Columnas disponibles: {list(datos.columns)}")
+        raise e
     
     # Convertir a mensual (3, N)
     inv_m = costos_anuales_a_mensuales(inv_años, N)
@@ -246,8 +249,25 @@ def correr_modelo(
     if variables is None:
         variables = default_variables()
     
-    # Cargar datos
-    tabla_costos = pd.read_excel(ruta_excel_costos)
+    # =========================================================================
+    # CORRECCIÓN DE LECTURA DE EXCEL
+    # =========================================================================
+    try:
+        # 1. Intentamos leer 'Hoja2' explícitamente (donde están los datos en costos.xlsx)
+        tabla_costos = pd.read_excel(ruta_excel_costos, sheet_name="Hoja2")
+    except (ValueError, IndexError):
+        # 2. Si falla (ej. el archivo no tiene Hoja2), leemos la primera hoja por defecto
+        # Esto mantiene compatibilidad si usas costoAño.xlsx en el futuro
+        print("Advertencia [MODULO5]: No se encontró 'Hoja2', leyendo la hoja por defecto.")
+        tabla_costos = pd.read_excel(ruta_excel_costos)
+    
+    # LIMPIEZA DE COLUMNAS: Quitar espacios en blanco al inicio/final (ej: "Costo _inversion")
+    tabla_costos.columns = tabla_costos.columns.str.strip()
+    
+    # Validar que exista la columna Año
+    if "Año" not in tabla_costos.columns:
+         raise ValueError(f"El archivo de costos no tiene la columna 'Año'. Columnas encontradas: {list(tabla_costos.columns)}")
+
     anio_inicio = int(tabla_costos["Año"].min())
     
     # Aplicar subsidio dinámico si corresponde
