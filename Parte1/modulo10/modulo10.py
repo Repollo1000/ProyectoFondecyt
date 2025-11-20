@@ -82,7 +82,7 @@ def construir_dataframe_horario_combinado(
 # ============================
 def calcular_balance_horario_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calcula: Autoconsumo, Inyección y Demanda de Red.
+    Calcula: Autoconsumo, Inyección y Demanda.
     """
     df_result = df.copy()
 
