@@ -3,16 +3,29 @@
 modulo7.py — Modelo FV con 4 stocks: Population, Households,
 Potential adopters of PV systems (W) y Adopters of PV systems (A).
 Unidades: MESES. Librería silenciosa (sin prints).
-
-NOMBRES "DE PAPER" PARA POBLACIÓN:
-- population_initial                        ≡ P0
-- fractional_growth_rate                    ≡ r (continua/mes)
-- pop_growth_rate_continuous_per_month      ≡ r  [1/mes]
-- net_growth_rate_population_time           ≡ r * P(t) [personas/mes]
 """
 from __future__ import annotations
 import numpy as np
 from scipy.integrate import solve_ivp
+
+# --- NUEVA FUNCIÓN DE UTILIDAD: INTERPOLACIÓN POR TIEMPO ---
+def _get_time_dependent_dpf(t: float, dpf_series: np.ndarray) -> np.ndarray:
+    """Obtiene el valor de la delayed_payback_fraction en el tiempo t.
+    Asume que los pasos de tiempo son de 1 mes (t=0, 1, 2, ...).
+    """
+    if dpf_series.ndim <= 1:
+        # Si es un vector (3,) o escalar, lo usa directamente
+        return dpf_series
+    
+    # Asumimos que la serie es (Regiones, Tiempos) y los tiempos son enteros (meses)
+    T = dpf_series.shape[1]
+    
+    # El tiempo t debe redondearse al mes más cercano. Clip para evitar IndexError.
+    t_idx = np.clip(int(np.round(t)), 0, T - 1)
+    
+    # Retorna la columna de la serie correspondiente al tiempo t
+    return dpf_series[:, t_idx]
+
 
 def _safe_ratio(numer: np.ndarray, denom: np.ndarray) -> np.ndarray:
     out = np.zeros_like(numer, dtype=float)
@@ -25,7 +38,7 @@ def ode_system(
     y: np.ndarray,
     pop_growth_rate_continuous_per_month: np.ndarray,  # r continuo
     r_hh_cont: np.ndarray,                             # r_H continuo
-    delayed_payback_fraction_vec: np.ndarray,
+    delayed_payback_fraction_series: np.ndarray,       # AHORA ES LA SERIE COMPLETA
     initial_households: np.ndarray,
     market_fraction_existing: np.ndarray,
     market_fraction_new: np.ndarray,
@@ -44,6 +57,11 @@ def ode_system(
     potential_adopters_of_pv_systems = y[2*n:3*n]   # W(t)
     adopters_of_pv_systems           = y[3*n:4*n]   # A(t)
 
+    # ------------------------------
+    # OBTENER DPF EN TIEMPO t (Para la ODE)
+    # ------------------------------
+    dpf_vec_current = _get_time_dependent_dpf(t, delayed_payback_fraction_series)
+    
     # ------------------------------------------------------------
     # Población — dP/dt = r * P
     # ------------------------------------------------------------
@@ -56,18 +74,15 @@ def ode_system(
 
     # ------------------------------------------------------------
     # Ecuaciones algebraicas de mercado:
-    # new_households = max(H - H0, 0)
     # able = mf_existing * H0 + mf_new * new_households
     # willing = δ * able
     # ------------------------------------------------------------
     new_households = np.clip(households - initial_households, 0.0, None)
     able    = market_fraction_existing * initial_households + market_fraction_new * new_households
-    willing = delayed_payback_fraction_vec * able
+    willing = dpf_vec_current * able # Usa el valor interpolado/actual
 
     # ------------------------------------------------------------
-    # Tasa de adopción (Bass-like):
-    # M = A + W;  frac = A / M  (con protección)
-    # adoption_rate = (p + q * frac) * max(W, 0)
+    # Tasa de adopción:
     # ------------------------------------------------------------
     M    = adopters_of_pv_systems + potential_adopters_of_pv_systems
     frac = _safe_ratio(adopters_of_pv_systems, M)
@@ -76,11 +91,9 @@ def ode_system(
 
     # ------------------------------------------------------------
     # Inflow a W(t):
-    # Exacto: d(willing)/dt = δ * mf_new * dH/dt
-    # Relajación: growth_inflow = max( (willing - (W + A)) / τ , 0 )
     # ------------------------------------------------------------
     if use_exact_willing_inflow:
-        dWilling_dt = delayed_payback_fraction_vec * market_fraction_new * d_households_dt
+        dWilling_dt = dpf_vec_current * market_fraction_new * d_households_dt
         growth_inflow = np.clip(dWilling_dt, 0.0, None)
     else:
         gap = willing - (potential_adopters_of_pv_systems + adopters_of_pv_systems)
@@ -88,8 +101,6 @@ def ode_system(
 
     # ------------------------------------------------------------
     # Estados W y A:
-    # dW/dt = growth_inflow - adoption_rate   (no-negatividad)
-    # dA/dt = adoption_rate
     # ------------------------------------------------------------
     d_potential_adopters_of_pv_systems_dt = growth_inflow - adoption_rate
     mask = (potential_adopters_of_pv_systems <= 0.0) & (d_potential_adopters_of_pv_systems_dt < 0.0)
@@ -129,16 +140,13 @@ def simulate_system(
     **kwargs,  # compatibilidad con nombres antiguos del dict
 ):
     # ----------------------------
-    # Compatibilidad hacia atrás (si vinieran los nombres antiguos)
+    # Compatibilidad y Normalización
     # ----------------------------
     if population_initial is None:
         population_initial = kwargs.get("initial_population")
     if fractional_growth_rate is None:
         fractional_growth_rate = kwargs.get("fractional_growth_rate_month")
 
-    # ----------------------------
-    # Normalización y checks
-    # ----------------------------
     population_initial            = np.asarray(population_initial, dtype=float)
     fractional_growth_rate        = np.asarray(fractional_growth_rate, dtype=float)
     average_people_per_household  = np.asarray(average_people_per_household, dtype=float)
@@ -150,16 +158,13 @@ def simulate_system(
     pvgp_kW_per_household         = np.asarray(pvgp_kW_per_household, dtype=float)
 
     if np.isscalar(delayed_payback_fraction):
+        # Si es escalar, lo convertimos a vector (3,)
         delayed_payback_fraction_vec = np.full_like(population_initial, float(delayed_payback_fraction), dtype=float)
     else:
+        # Si es un array, lo usamos. Puede ser (3,) o (3, T)
         delayed_payback_fraction_vec = np.asarray(delayed_payback_fraction, dtype=float)
 
     n = population_initial.shape[0]
-    assert all(arr.shape == (n,) for arr in [
-        fractional_growth_rate, average_people_per_household,
-        market_fraction_existing, market_fraction_new,
-        initial_installed_power_kW, p_month, q_month, pvgp_kW_per_household
-    ]), "Entradas shape (3,) para [Norte, Centro, Sur]."
 
     # ------------------------------------------------------------
     # Inicial (t = 0)
@@ -168,13 +173,23 @@ def simulate_system(
     A0 = np.clip(initial_installed_power_kW / pvgp_kW_per_household, 0.0, None)
 
     market_existing_initial = market_fraction_existing * initial_households
-    willing0 = delayed_payback_fraction_vec * market_existing_initial
+    
+    # --- CORRECCIÓN CLAVE: USAR SOLO EL VALOR INICIAL PARA T=0 ---
+    if delayed_payback_fraction_vec.ndim == 2:
+        # Si es una serie (3, T), tomamos solo el valor inicial (columna 0)
+        dpf_initial = delayed_payback_fraction_vec[:, 0]
+    else:
+        # Si es un vector (3,) o escalar, se usa directamente
+        dpf_initial = delayed_payback_fraction_vec
+        
+    willing0 = dpf_initial * market_existing_initial
+    # -----------------------------------------------------------
 
     initial_adopters_of_pv_systems = A0
     initial_potential_adopters_of_pv_systems = np.clip(willing0 - A0, 0.0, None)
 
     # ------------------------------------------------------------
-    # Tasas para ODE (CONTINUAS): usamos la entrada tal cual como r
+    # Tasas para ODE (CONTINUAS):
     # ------------------------------------------------------------
     pop_growth_rate_continuous_per_month = fractional_growth_rate
     if households_fractional_growth_rate_month is None:
@@ -198,7 +213,7 @@ def simulate_system(
             t, y,
             pop_growth_rate_continuous_per_month=pop_growth_rate_continuous_per_month,
             r_hh_cont=r_hh_cont,
-            delayed_payback_fraction_vec=delayed_payback_fraction_vec,
+            delayed_payback_fraction_series=delayed_payback_fraction_vec, # Pasa la serie completa
             initial_households=initial_households,
             market_fraction_existing=market_fraction_existing,
             market_fraction_new=market_fraction_new,
@@ -233,7 +248,17 @@ def simulate_system(
         market_fraction_existing * initial_households
         + market_fraction_new * new_households
     )
-    households_willing_to_adopt_pv_system = delayed_payback_fraction_vec * household_able_to_adopt
+    
+    # --- CORRECCIÓN 2: USO DE LA SERIE COMPLETA EN LA RECONSTRUCCIÓN ---
+    # Interpolamos los valores de la serie al tiempo de la solución (sol.t)
+    dpf_series_interpolated = np.array([
+        _get_time_dependent_dpf(t_val, delayed_payback_fraction_vec) 
+        for t_val in sol.t
+    ]) # (T_solucion, 3)
+
+    households_willing_to_adopt_pv_system = dpf_series_interpolated * household_able_to_adopt
+    # -------------------------------------------------------------------
+    
     gap_time = households_willing_to_adopt_pv_system - potential_adopters_of_pv_systems - adopters_of_pv_systems
 
     if use_exact_willing_inflow:
@@ -242,8 +267,10 @@ def simulate_system(
             (fractional_growth_rate if households_fractional_growth_rate_month is None
              else np.asarray(households_fractional_growth_rate_month, dtype=float))[None, :] * households
         )
+        
+        # --- CORRECCIÓN 3: USO DE LA SERIE COMPLETA EN LA TASA DE CRECIMIENTO ---
         growth_rate_time = np.clip(
-            delayed_payback_fraction_vec[None, :] * market_fraction_new[None, :] * dHH_dt_time, 0.0, None)
+            dpf_series_interpolated * market_fraction_new[None, :] * dHH_dt_time, 0.0, None)
     else:
         growth_rate_time = np.clip(gap_time / tau_months, 0.0, None)
 

@@ -4,12 +4,16 @@ from typing import Dict, Tuple, Optional
 import numpy as np
 import pandas as pd
 
+# --- IMPORTACIÓN CLAVE ---
+# Importamos el nuevo archivo de parámetros
+from .. import parametros_globales as p_g 
+# ------------------------
+
 # ============================
 # CONSTANTES
 # ============================
 DIFF_TABLE = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 1.0], dtype=float)
 SUB_TABLE  = np.array([0.30, 0.29, 0.25, 0.18, 0.10, 0.04, 0.02, 0.00, 0.00], dtype=float)
-REGIONES = ("Norte", "Centro", "Sur")
 
 
 # ============================
@@ -20,11 +24,13 @@ def default_variables() -> Dict:
     return {
         # Finanzas
         "rtasa": np.array([0.02, 0.02, 0.02], dtype=float),        # tasa anual
-        "project_lifetime_months": 26 * 12,                         # 27 años = 324 meses
+        # USAMOS LA CONSTANTE GLOBAL
+        "project_lifetime_months": p_g.PROJECT_LIFETIME_MONTHS, 
         "Percentage_capital_subsidy": np.array([0.3, 0.3, 0.3], dtype=float),
         
         # Energía
-        "pvgp_kW_per_household": np.array([3.3, 3.85, 4.95], dtype=float),
+        # USAMOS EL VALOR DE PVGP DE LOS PARÁMETROS GLOBALES
+        "pvgp_kW_per_household": p_g.MOD7_VARIABLES_INICIALES["pvgp_kW_per_household"],
         "capacity_factor_avg": np.array([0.35, 0.25, 0.25], dtype=float),
         "performance_ratio": np.array([0.75, 0.75, 0.75], dtype=float),
         "degradation_factor": np.array([0.6, 0.6, 0.6], dtype=float),  # por región
@@ -80,8 +86,6 @@ def calcular_sstc_mensual(
     """
     Calcula el Subsidized System Total Cost mensual.
     
-    SSTC(m) = [Inv(m) + AOC(m) × (1-(1+r_m)^(-m))/r_m] × (1 - Subsidio)
-    
     Returns:
         np.ndarray (3, N_meses): SSTC por región y mes
     """
@@ -89,7 +93,7 @@ def calcular_sstc_mensual(
     r_m = tasa_mensual(np.asarray(variables["rtasa"], dtype=float))
     subs = np.asarray(variables["Percentage_capital_subsidy"], dtype=float)
     
-    # Nombres de columnas
+    # Nombres de columnas (Normalizados)
     inv_cols = ["Costo _inversion_norte", "Costo _inversion_centro", "Costo _inversion_sur"]
     aoc_cols = ["Costo _operacion_norte", "Costo _operacion_centro", "Costo _operacion_sur"]
     
@@ -98,14 +102,20 @@ def calcular_sstc_mensual(
     años_disponibles = len(datos)
     
     if años_disponibles * 12 < N:
-        raise ValueError(
-            f"Datos insuficientes: se necesitan {N} meses "
-            f"(hay {años_disponibles} años = {años_disponibles*12} meses)"
-        )
+        # El código recorta la simulación al máximo disponible si los datos son insuficientes
+        N_max = años_disponibles * 12
+        print(f"ADVERTENCIA [MODULO5]: Datos insuficientes. Se necesitan {N} meses, pero solo hay {N_max}. Recortando simulación.")
+        variables["project_lifetime_months"] = N_max # Recortar N para que no haya crash en otros cálculos
+        N = N_max 
     
     # Extraer costos anuales (3, T_años)
-    inv_años = datos[inv_cols].to_numpy(dtype=float).T
-    aoc_años = datos[aoc_cols].to_numpy(dtype=float).T
+    # Aseguramos que las columnas existan tras la limpieza
+    try:
+        inv_años = datos[inv_cols].to_numpy(dtype=float).T
+        aoc_años = datos[aoc_cols].to_numpy(dtype=float).T
+    except KeyError as e:
+        print(f"ERROR [MODULO5]: No se encontraron las columnas de costos esperadas. Columnas disponibles: {list(datos.columns)}")
+        raise e
     
     # Convertir a mensual (3, N)
     inv_m = costos_anuales_a_mensuales(inv_años, N)
@@ -133,8 +143,6 @@ def calcular_sstc_mensual(
 def calcular_energia_mensual(variables: Dict) -> np.ndarray:
     """
     Calcula energía mensual por hogar con degradación.
-    
-    E(m) = kW × horas_mes × CF × PR × (1 - d)^(m/12)
     
     Returns:
         np.ndarray (3, N_meses): Energía en kWh/mes por hogar
@@ -170,8 +178,6 @@ def calcular_lcoe_mensual(sstc: np.ndarray, variables: Dict) -> np.ndarray:
     """
     Calcula LCOE mensual.
     
-    LCOE(m) = SSTC(m) / Σ(i=1..m) E_i / (1+r_m)^i
-    
     Returns:
         np.ndarray (3, N_meses): LCOE por región y mes
     """
@@ -187,7 +193,8 @@ def calcular_lcoe_mensual(sstc: np.ndarray, variables: Dict) -> np.ndarray:
         descuento = 1.0 / np.power(1.0 + r_m[:, None], i[None, :])
         energia_pv = np.sum(E[:, :m] * descuento, axis=1)
         
-        lcoe[:, m-1] = sstc[:, m-1] / energia_pv
+        # División segura
+        lcoe[:, m-1] = safe_ratio(sstc[:, m-1], energia_pv)
     
     return lcoe
 
@@ -238,19 +245,29 @@ def correr_modelo(
 ) -> Dict:
     """
     Ejecuta el modelo completo en granularidad mensual.
-    
-    Args:
-        ruta_excel_costos: Ruta al archivo Excel con costos
-        variables: Diccionario con parámetros (usa defaults si es None)
-    
-    Returns:
-        Dict con resultados del modelo
     """
     if variables is None:
         variables = default_variables()
     
-    # Cargar datos
-    tabla_costos = pd.read_excel(ruta_excel_costos)
+    # =========================================================================
+    # CORRECCIÓN DE LECTURA DE EXCEL
+    # =========================================================================
+    try:
+        # 1. Intentamos leer 'Hoja2' explícitamente (donde están los datos en costos.xlsx)
+        tabla_costos = pd.read_excel(ruta_excel_costos, sheet_name="Hoja2")
+    except (ValueError, IndexError):
+        # 2. Si falla (ej. el archivo no tiene Hoja2), leemos la primera hoja por defecto
+        # Esto mantiene compatibilidad si usas costoAño.xlsx en el futuro
+        print("Advertencia [MODULO5]: No se encontró 'Hoja2', leyendo la hoja por defecto.")
+        tabla_costos = pd.read_excel(ruta_excel_costos)
+    
+    # LIMPIEZA DE COLUMNAS: Quitar espacios en blanco al inicio/final (ej: "Costo _inversion")
+    tabla_costos.columns = tabla_costos.columns.str.strip()
+    
+    # Validar que exista la columna Año
+    if "Año" not in tabla_costos.columns:
+         raise ValueError(f"El archivo de costos no tiene la columna 'Año'. Columnas encontradas: {list(tabla_costos.columns)}")
+
     anio_inicio = int(tabla_costos["Año"].min())
     
     # Aplicar subsidio dinámico si corresponde
@@ -258,11 +275,13 @@ def correr_modelo(
     
     # Calcular métricas mensuales
     sstc = calcular_sstc_mensual(tabla_costos, anio_inicio, variables)
+    
+    # Las siguientes funciones usan el nuevo 'project_lifetime_months' que puede haber cambiado en calcular_sstc_mensual
     energia = calcular_energia_mensual(variables)
     lcoe = calcular_lcoe_mensual(sstc, variables)
     
     return {
-        "regiones": REGIONES,
+        "regiones": p_g.REGIONES, # USAMOS LAS REGIONES GLOBALES
         "variables": variables,
         "info_subsidio": info_sub,
         "tabla_costos": tabla_costos,
@@ -278,11 +297,10 @@ def correr_modelo(
 # ============================
 __all__ = [
     "default_variables",
-    "REGIONES",
     "correr_modelo",
     "calcular_sstc_mensual",
     "calcular_energia_mensual",
     "calcular_lcoe_mensual",
     "subsidy_from_difference",
-    "aplicar_subsidio_dinamMico",
+    "aplicar_subsidio_dinamico",
 ]
