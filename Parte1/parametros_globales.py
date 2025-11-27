@@ -7,7 +7,7 @@ import numpy as np
 # --- 1. DEFINICIONES GENERALES ---
 REGIONES = ("Norte", "Centro", "Sur")
 
-# Vida útil del proyecto en meses (27 años * 12 meses)
+# Vida útil del proyecto en meses (26 años * 12 meses)
 PROJECT_LIFETIME_MONTHS = 312
 
 
