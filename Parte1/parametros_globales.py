@@ -22,7 +22,7 @@ DATOS_DIR = os.path.join(BASE_DIR, "Datos")
 # Orden consistente con el resto del modelo
 REGIONES = ("Norte", "Centro", "Sur")
 
-# Vida útil del proyecto en meses (26 años * 12 meses)
+# Vida útil del proyecto en meses (27 años * 12 meses)
 PROJECT_LIFETIME_MONTHS = 324
 
 

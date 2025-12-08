@@ -1,174 +1,158 @@
 # -*- coding: utf-8 -*-
 """
-modulo9.py — Utilidades de entrada de datos para el Módulo 9 (emisiones).
+modulo9.py — Módulo de Emisiones (Solo Sección 9.2: Consumo de Electricidad).
 
-Por AHORA este módulo SOLO se preocupa de:
-- Cargar el vector de factores de emisión desde factor_emisionv2.csv
-- Cargar la curva de carga desde curva_de_carga.xlsx
-- Calcular un consumo mensual por hogar a partir de la curva de carga
-
-No realiza aún cálculos de emisiones; la idea es verificar que
-todas las variables de entrada se leen y tienen sentido.
+Flujo:
+1. Recolección de datos (Factores y Curva de Carga).
+2. Agrupación de consumo horario a mensual.
+3. Cálculo de emisiones por consumo (Hogares * Consumo * Factor).
+4. Acumulación anual.
 """
 
 from __future__ import annotations
-
 import numpy as np
 import pandas as pd
 
 try:
-    # Import relativo cuando se usa como paquete: python -m Parte1.modulo9.main_mod9
     from .. import parametros_globales as p_g
 except ImportError:
-    # Import directo para ejecuciones sueltas
     import parametros_globales as p_g
 
 
-# --------------------------------------------------------------------
-# 1. FACTOR DE EMISIÓN
-# --------------------------------------------------------------------
-
+# =============================================================================
+# 1. RECOLECCIÓN DE DATOS
+# =============================================================================
 
 def cargar_factor_emision(scenario: str | None = None) -> tuple[np.ndarray, np.ndarray]:
     """
-    Lee el archivo factor_emisionv2.csv y devuelve:
-
-    - tiempos: vector 1D con la columna "tiempo" (en meses, o como esté definido)
-    - factors: vector 1D con los factores de emisión del escenario elegido
-
-    Parameters
-    ----------
-    scenario : str, opcional
-        Escenario a usar: "CN", "SR" o "AT".
-        Si es None, usa p_g.MOD9_VARIABLES_INICIALES["default_emission_scenario"].
-
-    Returns
-    -------
-    tiempos : np.ndarray
-        Vector 1D (float) con los tiempos.
-    factors : np.ndarray
-        Vector 1D (float) con los factores de emisión (tCO2/MWh).
+    Lee factor_emisionv2.csv (Mensual).
+    Retorna: tiempos, factores [tCO2/MWh].
     """
     if scenario is None:
         scenario = p_g.MOD9_VARIABLES_INICIALES["default_emission_scenario"]
 
-    scenario = scenario.upper().strip()
-    if scenario not in ("CN", "SR", "AT"):
-        raise ValueError(f"Escenario de emisión no válido: {scenario}. Use 'CN', 'SR' o 'AT'.")
+    # Mapeo de escenario
+    scenario_key = str(scenario).upper().strip()
+    # Mapea lo que el usuario escribe -> Nombre interno de columna
+    map_scenarios = {
+        "CN": "CN", "ALTO": "CN", 
+        "SR": "SR", "MEDIO": "SR", 
+        "AT": "AT", "BAJO": "AT"
+    }
+    target_col = map_scenarios.get(scenario_key, "CN")
 
     csv_path = p_g.MOD9_RUTAS["emission_factor_file"]
-
-    # El archivo está separado por ; y la primera fila es de etiquetas/unidades,
-    # así que usaremos header=0 y luego drop de la fila 0.
+    
+    # Leer CSV (separador ';', saltar fila unidades)
     df_raw = pd.read_csv(csv_path, sep=";")
-
-    # Columnas esperadas:
-    #   'Unnamed: 0' → tiempo
-    #   'CN scenario', 'SR scenario', 'AT scenario'
-    # La fila 0 tiene las unidades, la descartamos.
     df = df_raw.drop(index=0).copy()
 
-    # Renombramos columnas para algo más manejable
-    df = df.rename(
-        columns={
-            "Unnamed: 0": "tiempo",
-            "CN scenario": "CN",
-            "SR scenario": "SR",
-            "AT scenario": "AT",
-        }
-    )
+    # Renombrar por posición para evitar errores de nombre (SR scenario vs SR(medio))
+    cols = df.columns
+    df = df.rename(columns={cols[0]: "tiempo", cols[1]: "CN", cols[2]: "SR", cols[3]: "AT"})
 
-    # Convertimos a numérico (por si vinieron como strings)
-    df["tiempo"] = pd.to_numeric(df["tiempo"], errors="coerce")
-    df["CN"] = pd.to_numeric(df["CN"], errors="coerce")
-    df["SR"] = pd.to_numeric(df["SR"], errors="coerce")
-    df["AT"] = pd.to_numeric(df["AT"], errors="coerce")
-
-    # Eliminamos filas que quedaron con NaN
-    df = df.dropna(subset=["tiempo", scenario])
-
-    tiempos = df["tiempo"].to_numpy(dtype=float)
-    factors = df[scenario].to_numpy(dtype=float)
-
-    return tiempos, factors
+    # Convertir a numérico
+    for c in ["tiempo", "CN", "SR", "AT"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    
+    df = df.dropna(subset=["tiempo", target_col])
+    
+    return df["tiempo"].to_numpy(dtype=float), df[target_col].to_numpy(dtype=float)
 
 
-# --------------------------------------------------------------------
-# 2. CURVA DE CARGA
-# --------------------------------------------------------------------
-
-
-def cargar_curva_de_carga() -> pd.DataFrame:
+def cargar_perfil_consumo_mensual() -> pd.DataFrame:
     """
-    Lee el archivo curva_de_carga.xlsx y devuelve un DataFrame con las columnas:
-
-        'anio', 'mes', 'hora', 'demanda_norte', 'demanda_centro', 'demanda_sur'
-
-    (Normalizamos nombres para usarlos de forma consistente.)
+    Lee curva_de_carga.xlsx (Horaria) y la agrupa por mes.
+    Retorna: DataFrame (12 filas, 3 columnas) [kWh/mes/hogar].
     """
     xls_path = p_g.MOD9_RUTAS["curva_carga_file"]
-
     df = pd.read_excel(xls_path, sheet_name="curvas de carga")
-
-    df = df.rename(
-        columns={
-            "Año": "anio",
-            "mes": "mes",
-            "hora": "hora",
-            "demanda_norte": "demanda_norte",
-            "demanda_centro": "demanda_centro",
-            "demanda_sur": "demanda_sur",
-        }
-    )
-
-    return df
-
-
-def consumo_mensual_por_hogar_desde_curva(
-    df_curva: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Calcula el consumo mensual por hogar (kWh/mes·hogar) para cada región
-    a partir de la curva de carga horaria.
-
-    Suposición:
-    - Cada fila corresponde a una hora.
-    - Las columnas demanda_* están en kWh/h por hogar (equivalente a kW promedio en esa hora).
-    - Sumando sobre todas las horas del mes obtenemos kWh/mes·hogar.
-
-    El DataFrame retornado tiene:
-        índice: mes (1..12)
-        columnas: 'Norte', 'Centro', 'Sur'
-        valores: kWh/mes·hogar aproximados.
-    """
-    # Agrupamos por mes (si después tienes varios años, se puede agrupar por ['anio','mes'])
-    grp = (
-        df_curva.groupby("mes")[["demanda_norte", "demanda_centro", "demanda_sur"]]
-        .sum()
-        .rename(
-            columns={
-                "demanda_norte": "Norte",
-                "demanda_centro": "Centro",
-                "demanda_sur": "Sur",
-            }
-        )
-    )
-
-    # Cada entrada del grp es el consumo mensual por hogar (kWh/mes·hogar) por región.
-    return grp
-
-
-def calcular_emisiones_consumo(factores,households,consumo):
-    households = m7.calcular_households_totales()
-    consumo=0#convertir a  MWh
-    factor=0
-
-    emisiones = households*consumo_hogar*factor
-    for region in 100:
-
-
-
-
-    return 0
     
+    # Normalizar nombres
+    df = df.rename(columns={
+        "mes": "mes",
+        "demanda_norte": "Norte",
+        "demanda_centro": "Centro",
+        "demanda_sur": "Sur",
+    })
+    
+    # Groupby por mes (sumando las horas del mes)
+    # Esto nos da el consumo total de un hogar en ese mes (kWh/mes)
+    perfil_mensual = df.groupby("mes")[["Norte", "Centro", "Sur"]].sum()
+    
+    return perfil_mensual
 
+
+# =============================================================================
+# 2. CÁLCULO DE EMISIONES (SECCIÓN 9.2)
+# =============================================================================
+
+def calcular_emisiones_consumo(
+    factores_emision: np.ndarray, 
+    households: np.ndarray, 
+    perfil_consumo_12_meses: pd.DataFrame
+) -> np.ndarray:
+    """
+    Calcula emisiones = Factor * Consumo * Hogares.
+    
+    Args:
+        factores_emision: Vector (T,) [tCO2/MWh].
+        households: Matriz (T, 3) [Cantidad de Hogares].
+        perfil_consumo_12_meses: DF 12 filas [kWh/mes].
+        
+    Returns:
+        emisiones: Matriz (T, 3) [tCO2/mes].
+    """
+    # A. Preparar Consumo (Expandir 12 meses a todo el periodo T)
+    consumo_base = perfil_consumo_12_meses[["Norte", "Centro", "Sur"]].to_numpy(dtype=float) # (12, 3)
+    
+    # Calculamos cuántas veces repetir el año para cubrir la simulación
+    n_meses_necesarios = households.shape[0]
+    n_repeticiones = int(np.ceil(n_meses_necesarios / 12))
+    
+    # Repetimos el año las veces necesarias (Tile)
+    consumo_t_completo = np.tile(consumo_base, (n_repeticiones, 1))
+    
+    # B. Definir T (Mínimo largo común)
+    T = min(len(factores_emision), households.shape[0], consumo_t_completo.shape[0])
+    
+    
+    F = factores_emision[:T]       # (T,)
+    H = households[:T, :]          # (T, 3)
+    C_kwh = consumo_t_completo[:T, :]  # (T, 3) en kWh/mes
+    
+    # D. Cálculo Vectorial
+    # 1. Convertir Consumo unitario de kWh a MWh (dividir por 1000)
+    C_mwh = C_kwh / 1000.0
+    
+    # 2. Calcular Emisiones: Factor (tCO2/MWh) * Consumo (MWh) * Hogares
+    emisiones = F[:, None] * C_mwh * H
+    
+    return emisiones
+
+
+# =============================================================================
+# 3. ACUMULACIÓN ANUAL
+# =============================================================================
+
+def acumular_anualmente(datos_mensuales: np.ndarray) -> np.ndarray:
+    """
+    Suma los datos mensuales en bloques de 12 meses (Años).
+    Input: (T_meses, 3) -> Output: (T_años, 3).
+    """
+    T, regiones = datos_mensuales.shape
+    n_anios = T // 12
+    
+    # Recortar sobrantes
+    datos_limpios = datos_mensuales[:n_anios*12, :]
+    
+    # Reshape: (Años, 12 meses, 3 regiones)
+    datos_reshaped = datos_limpios.reshape(n_anios, 12, regiones)
+    
+    # Sumar eje 1 (los 12 meses)
+    anual = np.sum(datos_reshaped, axis=1)
+    
+    return anual
+
+__all__ = ["cargar_factor_emision", "cargar_perfil_consumo_mensual", 
+           "calcular_emisiones_consumo", "acumular_anualmente"]

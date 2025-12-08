@@ -1,146 +1,141 @@
 # -*- coding: utf-8 -*-
 """
-main_mod9.py — Prueba básica del Módulo 9.
-
-Objetivo en esta etapa:
-- Mostrar las variables iniciales del módulo 9.
-- Verificar que se carga correctamente factor_emisionv2.csv.
-- Verificar que se carga correctamente curva_de_carga.xlsx.
-- Obtener y mostrar la serie de households desde el Módulo 7.
-NO se calculan todavía emisiones, solo se revisan inputs.
+main_mod9.py — Orquestador con MENÚ DE SELECCIÓN DE ESCENARIO.
 """
-
 from __future__ import annotations
-
 import numpy as np
 from prettytable import PrettyTable, SINGLE_BORDER
 
 try:
-    # Ejecución como paquete: python -m Parte1.modulo9.main_mod9
     from .. import parametros_globales as p_g
     from . import modulo9 as m9
     from ..modulo7 import modulo7 as m7
 except ImportError:
-    # Ejecución directa: python modulo9/main_mod9.py
     import parametros_globales as p_g
     import modulo9 as m9
     from modulo7 import modulo7 as m7
 
+# =============================================================================
+# FUNCIONES DE UTILERÍA (Menú y Visualización)
+# =============================================================================
 
-# ------------ Helpers con PrettyTable ------------
-
-def mostrar_dict_en_tabla(titulo: str, d: dict):
-    table = PrettyTable()
-    table.set_style(SINGLE_BORDER)
-    table.field_names = ["Clave", "Valor"]
-    for k, v in d.items():
-        table.add_row([k, str(v)])
-    print(f"\n=== {titulo} ===")
-    print(table)
-
+def solicitar_escenario_usuario() -> tuple[str, str]:
+    """
+    Muestra un menú en consola y captura la elección del usuario.
+    Retorna: (código_interno, nombre_display)
+    """
+    print("\n" + "="*40)
+    print("   SELECCIÓN DE ESCENARIO DE EMISIONES")
+    print("="*40)
+    print("   1. ALTO  (CN Scenario)")
+    print("   2. MEDIO (SR Scenario)")
+    print("   3. BAJO  (AT Scenario)")
+    print("-" * 40)
+    
+    eleccion = input(">> Ingrese el número de su opción (1, 2 o 3): ").strip()
+    
+    # Mapa de opciones a códigos que entiende modulo9.py
+    opciones = {
+        "1": ("ALTO", "Alto (CN)"),
+        "2": ("MEDIO", "Medio (SR)"),
+        "3": ("BAJO", "Bajo (AT)")
+    }
+    
+    # Si la entrada no es válida, usamos MEDIO por defecto
+    seleccion = opciones.get(eleccion, ("MEDIO", "Medio (SR)"))
+    
+    if eleccion not in opciones:
+        print(f"\n[!] Opción '{eleccion}' no reconocida. Usando '{seleccion[1]}' por defecto.")
+    else:
+        print(f"\n[OK] Escenario seleccionado: {seleccion[1]}")
+        
+    return seleccion
 
 def mostrar_factores(tiempos: np.ndarray, factors: np.ndarray, titulo: str):
     table = PrettyTable()
     table.set_style(SINGLE_BORDER)
-    table.field_names = ["idx", "t (mes)", "factor (tCO2/MWh)"]
-
-    n = min(10, len(factors))
-    for i in range(n):
-        table.add_row([i, f"{tiempos[i]:.0f}", f"{factors[i]:.4f}"])
-
-    print(f"\n=== {titulo} (primeros {n}) ===")
+    table.field_names = ["Mes (idx)", "Factor (tCO2/MWh)"]
+    # Mostrar solo los primeros 5 y el último para no llenar la pantalla
+    indices = [0, 1, 2, 3, 4, len(factors)-1]
+    for i in indices:
+        if i < len(factors):
+            table.add_row([f"{tiempos[i]:.0f}", f"{factors[i]:.4f}"])
+    print(f"\n=== Verificación: {titulo} ===")
     print(table)
-
 
 def mostrar_consumo_mensual(consumo_df):
     table = PrettyTable()
     table.set_style(SINGLE_BORDER)
     table.field_names = ["Mes"] + list(consumo_df.columns)
-
-    for mes, row in consumo_df.iterrows():
-        fila = [mes] + [f"{v:.2f}" for v in row.values]
+    # Mostrar solo primeros 3 meses
+    for i in range(3):
+        row = consumo_df.iloc[i]
+        fila = [str(row.name)] + [f"{v:.1f}" for v in row.values]
         table.add_row(fila)
-
-    print("\n=== Consumo mensual por hogar (kWh/mes·hogar) ===")
+    print("\n=== Verificación: Perfil de Consumo (kWh/mes/hogar) [Primeros 3 meses] ===")
     print(table)
 
-
-def mostrar_households(t: np.ndarray, households: np.ndarray, regiones, n_meses: int = 6):
-    table = PrettyTable()
-    table.set_style(SINGLE_BORDER)
-    table.field_names = ["Mes"] + list(regiones)
-
-    for i in range(min(n_meses, len(t))):
-        fila = [int(t[i])] + [f"{v:.1f}" for v in households[i, :]]
-        table.add_row(fila)
-
-    print("\n=== Households por región (primeros meses) ===")
-    print(table)
-
-
-# ------------ main ------------
+# =============================================================================
+# MAIN (ORQUESTADOR)
+# =============================================================================
 
 def main():
-    # ------------------------------------------------------
-    # 0) Variables iniciales y rutas
-    # ------------------------------------------------------
-    print("=== PRUEBA MÓDULO 9: VARIABLES DE ENTRADA ===")
-    print("REGIONES:", p_g.REGIONES)
+    # --- MENÚ INTERACTIVO ---
+    codigo_escenario, nombre_escenario = solicitar_escenario_usuario()
+    
+    print("\n-------------------------------------------------------------")
+    print(f"   INICIANDO SIMULACIÓN CON ESCENARIO: {nombre_escenario.upper()}")
+    print("-------------------------------------------------------------")
 
-    mostrar_dict_en_tabla("MOD9_VARIABLES_INICIALES", p_g.MOD9_VARIABLES_INICIALES)
-    mostrar_dict_en_tabla("MOD9_RUTAS", p_g.MOD9_RUTAS)
+    # --- PASO 1: OBTENER DATOS DE MÓDULO 7 (HOGARES) ---
+    print("\n>>> PASO 1: Ejecutando simulación de adopción (Módulo 7)...")
+    res_m7 = m7.simulate_system(**p_g.MOD7_VARIABLES_INICIALES)
+    t_sim = res_m7[0]
+    households = res_m7[2]  # Matriz (T, 3)
+    
+    # --- PASO 2: RECOLECCIÓN DE DATOS DE ENTRADA MÓDULO 9 ---
+    print("\n>>> PASO 2: Cargando datos externos (Excel/CSV)...")
+    
+    # 2.1 Cargar Factores según la elección del usuario
+    tiempos_em, factores = m9.cargar_factor_emision(codigo_escenario)
+    mostrar_factores(tiempos_em, factores, f"Factores Escenario {nombre_escenario}")
 
-    # ------------------------------------------------------
-    # 1) Factores de emisión (CSV)
-    # ------------------------------------------------------
-    escenario = p_g.MOD9_VARIABLES_INICIALES["default_emission_scenario"]
-    tiempos_em, factors = m9.cargar_factor_emision(escenario)
+    # 2.2 Cargar Perfil de Consumo
+    perfil_consumo = m9.cargar_perfil_consumo_mensual()
+    mostrar_consumo_mensual(perfil_consumo)
 
-    print("\nEscenario de emisión seleccionado:", escenario)
-    print("N° puntos en el vector de factores:", len(factors))
-    mostrar_factores(tiempos_em, factors, "Factores de emisión (factor_emisionv2.csv)")
-
-    # ------------------------------------------------------
-    # 2) Curva de carga y consumo mensual por hogar
-    # ------------------------------------------------------
-    df_curva = m9.cargar_curva_de_carga()
-
-    print("\n=== Curva de carga (primeras 5 filas) ===")
-    print(df_curva.head())
-
-    consumo_mensual = m9.consumo_mensual_por_hogar_desde_curva(df_curva)
-    mostrar_consumo_mensual(consumo_mensual)
-
-    # ------------------------------------------------------
-    # 3) Households desde el Módulo 7
-    # ------------------------------------------------------
-    print("\n=== HOUSEHOLDS DESDE MÓDULO 7 (simulate_system) ===")
-
-    variables_m7 = p_g.MOD7_VARIABLES_INICIALES.copy()
-
-    (
-        t,
-        population,
-        households,
-        new_households,
-        adopters,
-        *_
-    ) = m7.simulate_system(**variables_m7)
-
-    print(f"Longitud de la simulación de M7 (t): {len(t)} meses")
-    mostrar_households(t, households, p_g.REGIONES, n_meses=6)
-
-    # Chequeo rápido de coherencia de largos
-    print("\n=== CHEQUEO DE CONSISTENCIA DE LONGITUDES ===")
-    print(f"  len(tiempos_em) (factores emisión) = {len(tiempos_em)}")
-    print(f"  len(t)           (Módulo 7)        = {len(t)}")
-    if len(tiempos_em) == len(t):
-        print("  → OK: mismo número de pasos de tiempo.")
-    else:
-        print("  → OJO: no coinciden las longitudes; habrá que alinear series antes de calcular emisiones.")
-
-    print("\nFIN de prueba de inputs del Módulo 9 (sin cálculos de emisiones).")
-
+    # --- PASO 3: CÁLCULO DE EMISIONES (SECCIÓN 9.2) ---
+    print("\n>>> PASO 3: Calculando Emisiones de Consumo (Sección 9.2)...")
+    
+    emisiones_mensuales = m9.calcular_emisiones_consumo(
+        factores_emision=factores,
+        households=households,
+        perfil_consumo_12_meses=perfil_consumo
+    )
+    
+    # --- PASO 4: ACUMULACIÓN ANUAL Y REPORTE ---
+    print("\n>>> PASO 4: Generando Reporte Anual...")
+    emisiones_anuales = m9.acumular_anualmente(emisiones_mensuales)
+    
+    # Mostrar Tabla Final
+    table = PrettyTable()
+    table.set_style(SINGLE_BORDER)
+    # Título dinámico según el escenario
+    table.title = f"EMISIONES DE CONSUMO ELÉCTRICO - ESCENARIO {nombre_escenario.upper()}"
+    table.field_names = ["Año", "Norte (tCO2)", "Centro (tCO2)", "Sur (tCO2)", "TOTAL PAÍS"]
+    
+    anio_inicio = 2025
+    for i in range(min(10, len(emisiones_anuales))):
+        anio = anio_inicio + i
+        vals = emisiones_anuales[i, :]
+        total = np.sum(vals)
+        fila = [anio] + [f"{v:,.0f}" for v in vals] + [f"{total:,.0f}"]
+        table.add_row(fila)
+    
+    print(table)
+    
+    total_periodo = np.sum(emisiones_mensuales)
+    print(f"\n[RESULTADO FINAL] Emisiones Totales Acumuladas ({nombre_escenario}): {total_periodo:,.0f} tCO2")
 
 if __name__ == "__main__":
     main()
