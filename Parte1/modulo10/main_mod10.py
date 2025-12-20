@@ -26,6 +26,7 @@ DATOS_DIR = os.path.join(BASE_DIR, 'Datos')
 FILE_CONSUMO = "curva_de_carga.xlsx"
 FILE_GENERACION = "Factor_capacidad_solar.csv"
 FILE_PRECIOS = "precio_electricidad_vf.xlsx"
+FILE_ANNUAL_SAVINGS = "annual_savings.xlsx"  # Nombre del archivo de salida automático
 
 
 # ============================================================================
@@ -39,34 +40,17 @@ def input_seguro(prompt, opciones_validas):
         print(f"Opción no válida. Debe ser una de: {opciones_validas}")
 
 
-def imprimir_tabla_bonita(df_input, titulo):
-    """Convierte un DataFrame (o parte de él) en una PrettyTable formateada a 4 decimales."""
-    t = PrettyTable()
-    t.field_names = df_input.columns.tolist()
-
-    for _, row in df_input.iterrows():
-        fila_formateada = []
-        for val in row:
-            if isinstance(val, (float, np.floating)):
-                fila_formateada.append(f"{val:.4f}")
-            else:
-                fila_formateada.append(str(val))
-        t.add_row(fila_formateada)
-
-    print(f"\n>>> {titulo}")
-    print(t)
-
-
 # ============================================================================
 # 3. FLUJO PRINCIPAL
 # ============================================================================
 def main():
     print("=" * 100)
-    print("   MÓDULO 10 - REPORTE FÍSICO + ECONÓMICO POR POLÍTICA Y REGIÓN")
+    print("   MÓDULO 10 - REPORTE FÍSICO + ECONÓMICO + GENERACIÓN DE ANNUAL_SAVINGS")
     print("=" * 100)
 
     # Vida útil desde parametros_globales
-    PROJECT_LIFETIME_MONTHS = getattr(p_g, "PROJECT_LIFETIME_MONTHS", 12)
+    PROJECT_LIFETIME_MONTHS = getattr(p_g, "PROJECT_LIFETIME_MONTHS", 324)
+    print(f"--> Configurado para simular: {PROJECT_LIFETIME_MONTHS} meses")
 
     # ------------------------------------------------------------------------
     # 1) CARGA DE DATOS
@@ -128,7 +112,7 @@ def main():
     }
     politica = mapa_pol[op_pol]
 
-    # Mapeo nombres columnas de ingreso/utilidad
+    # Mapeo nombres columnas de ingreso/utilidad para reporte visual
     if politica == "net_billing":
         col_ingreso = "ingreso_nb"
         col_utilidad = "utilidad_nb"
@@ -167,6 +151,9 @@ def main():
 
     # Diccionario para acumular resultados por región y guardarlos en Excel
     resultados_excel = {}
+    
+    # Diccionario para acumular los ahorros anuales (para annual_savings.xlsx)
+    ahorros_anuales_dict = {}
 
     # ------------------------------------------------------------------------
     # 5) BALANCE ECONÓMICO Y TABLA POR REGIÓN
@@ -175,11 +162,22 @@ def main():
     print(f"REPORTE FINAL: RESUMEN MENSUAL ({nombre_politica_pretty}) - Escenario: {escenario.upper()}")
     print("=" * 100)
 
-    # Advertencia si la tabla de precios es más corta que la vida útil
+    # Extender precios si es necesario (repetir último valor si faltan datos)
     if len(df_precios) < PROJECT_LIFETIME_MONTHS:
-        print(f"\n⚠ OJO: df_precios solo tiene {len(df_precios)} periodos, "
-              f"pero PROJECT_LIFETIME_MONTHS = {PROJECT_LIFETIME_MONTHS}. "
-              "Los meses sin precio quedarán con NaN en el Excel.")
+        print(f"\n⚠ Aviso: df_precios ({len(df_precios)}) es más corto que la vida útil ({PROJECT_LIFETIME_MONTHS}). Se rellenará con el último valor.")
+        ultimo_precio = df_precios.iloc[-1]
+        filas_faltantes = PROJECT_LIFETIME_MONTHS - len(df_precios)
+        # Crear dataframe de relleno
+        df_relleno = pd.DataFrame([ultimo_precio] * filas_faltantes)
+        # Ajustar índice para continuar
+        df_relleno.index = range(len(df_precios) + 1, PROJECT_LIFETIME_MONTHS + 1) # (ajuste simple)
+        # Concatenar (en realidad df_precios se usa por mapeo de 'periodo', hay que asegurar que la columna periodo siga)
+        # Manera simplificada: Re-indexar df_precios
+        df_precios_ext = pd.concat([df_precios, df_relleno], ignore_index=True)
+        # Recalcular columna periodo si existe, o asumir índice
+        if "periodo" in df_precios_ext.columns:
+             df_precios_ext["periodo"] = np.arange(1, len(df_precios_ext) + 1)
+        df_precios = df_precios_ext
 
     for region in m10.REGIONES:
         if region not in resumen_fisico:
@@ -188,24 +186,19 @@ def main():
         print(f"\n>>> REGIÓN: {region}")
 
         # df_fisico_reg: año típico por mes
-        # columnas: gen, demanda, autoconsumo, inyeccion, demanda_red, dif_total
         df_fisico_reg = resumen_fisico[region].copy()   # index = mes
         df_fisico_reg = df_fisico_reg.reset_index()     # columna 'mes'
-        n_base = len(df_fisico_reg)                     # normalmente 12
+        n_base = len(df_fisico_reg)                     # 12
 
         # ------------------------ PATRÓN FÍSICO COMPLETO ------------------------
-        # Repetimos el año típico hasta cubrir PROJECT_LIFETIME_MONTHS
         repeticiones = int(np.ceil(PROJECT_LIFETIME_MONTHS / n_base))
         pattern_rep = pd.concat([df_fisico_reg] * repeticiones, ignore_index=True).iloc[:PROJECT_LIFETIME_MONTHS]
 
-        # Agregamos columna periodo (1..N) y año
         pattern_rep["periodo"] = np.arange(1, PROJECT_LIFETIME_MONTHS + 1)
         pattern_rep["anio"] = (pattern_rep["periodo"] - 1) // n_base + 1
-        # 'mes' ya viene de df_fisico_reg (1..12) y se repite
-
         pattern_rep = pattern_rep.set_index("periodo")
 
-        # df_balance_mensual para el cálculo económico: solo inyección + demanda_red
+        # df_balance_mensual para el cálculo económico
         df_balance_mensual = pattern_rep[["inyeccion", "demanda_red"]].copy()
 
         # ------------------------ ECONOMÍA COMPLETA ------------------------
@@ -216,7 +209,7 @@ def main():
             politica=politica,
         )
 
-        # Seleccionamos columnas económicas y renombramos para Excel
+        # Seleccionamos columnas y renombramos
         df_econ_selected = df_econ_reg[
             ["precio_usd_kwh", "inyeccion", "demanda_red", col_ingreso, "costo_compra_usd", col_utilidad]
         ].rename(columns={
@@ -228,83 +221,107 @@ def main():
             col_utilidad: "utilidad_usd",
         })
 
-        # DataFrame final para esta región: físico (repetido) + económico, para TODOS los meses del proyecto
+        # Unir físico y económico
         df_salida_reg = pattern_rep.join(df_econ_selected)
+        
+        # --------------------------------------------------------------------
+        # NUEVO: CÁLCULO DE AHORRO REAL PARA ANNUAL_SAVINGS
+        # Ahorro = (Autoconsumo * Precio) + Ingreso_Venta
+        # --------------------------------------------------------------------
+        # Nota: autoconsumo está en kWh. ingreso_usd ya está en $.
+        df_salida_reg["ahorro_total_usd"] = (
+            df_salida_reg["autoconsumo"] * df_salida_reg["precio_usd_kwh"]
+        ) + df_salida_reg["ingreso_usd"]
+        
+        # Agrupar por año para obtener el total anual
+        ahorro_anual_serie = df_salida_reg.groupby("anio")["ahorro_total_usd"].sum()
+        ahorros_anuales_dict[region] = ahorro_anual_serie
 
-        # Reordenamos un poco las columnas
+        # Reordenamos columnas para el Excel de reporte
         cols_orden = [
             "anio", "mes",
             "gen", "demanda", "autoconsumo", "inyeccion", "demanda_red", "dif_total",
             "precio_usd_kwh", "inyeccion_kwh", "compra_red_kwh",
-            "ingreso_usd", "costo_compra_usd", "utilidad_usd",
+            "ingreso_usd", "costo_compra_usd", "utilidad_usd", "ahorro_total_usd"
         ]
         cols_orden = [c for c in cols_orden if c in df_salida_reg.columns]
         df_salida_reg = df_salida_reg[cols_orden]
-        df_salida_reg.index.name = "periodo"
-
-        # Guardamos en diccionario para escribir después en Excel
+        
         resultados_excel[region] = df_salida_reg
 
-        # ------------------ TABLA PRETTY (solo PRIMER AÑO) ------------------
-        print("  (Mostrando solo el AÑO 1 en pantalla; el Excel contiene toda la vida útil)")
-
-        # Primer año = primeros n_base periodos
-        df_econ_ano1 = df_econ_reg.iloc[:n_base]
-
-        tabla = PrettyTable()
-        tabla.field_names = [
-            "Mes",
-            "Precio (USD/kWh)",
-            "Inyección (kWh)",
-            "Compra Red (kWh)",
-            "Ingreso ($)",
-            "Costo Compra ($)",
-            "Utilidad ($)",
-        ]
-
-        for i in range(1, n_base + 1):
-            row_fis = df_fisico_reg.loc[i - 1] 
-            row_econ = df_econ_ano1.loc[i]
-
-            mes = int(row_fis["mes"])
-            precio = row_econ["precio_usd_kwh"]
-            inyec = row_econ["inyeccion"]
-            compra = row_econ["demanda_red"]
-            ingreso = row_econ[col_ingreso]
-            costo = row_econ["costo_compra_usd"]
-            utilidad = row_econ[col_utilidad]
-
-            tabla.add_row([
-                mes,
-                f"{precio:.4f}",
-                f"{inyec:.4f}",
-                f"{compra:.4f}",
-                f"{ingreso:.4f}",
-                f"{costo:.4f}",
-                f"{utilidad:.4f}",
+        # ------------------ TABLA PRETTY (AÑO 1) ------------------
+        # ... (solo visualización, sin cambios mayores)
+        df_view = df_salida_reg.iloc[:12]
+        t = PrettyTable()
+        t.field_names = ["Mes", "Precio", "Autocon($)", "Ingreso($)", "AhorroTotal($)"]
+        for _, r in df_view.iterrows():
+            val_autoc = r["autoconsumo"] * r["precio_usd_kwh"]
+            t.add_row([
+                int(r["mes"]), 
+                f"{r['precio_usd_kwh']:.3f}", 
+                f"{val_autoc:.2f}", 
+                f"{r['ingreso_usd']:.2f}", 
+                f"{r['ahorro_total_usd']:.2f}"
             ])
-
-        print(tabla)
-        print("(Utilidad: ingreso por inyección - costo de compra a la red)")
+        print(t)
 
     # ------------------------------------------------------------------------
-    # 6) GUARDAR RESULTADOS EN EXCEL
+    # 6) GUARDAR RESULTADOS DETALLADOS (REPORTE M10)
     # ------------------------------------------------------------------------
     if resultados_excel:
         nombre_archivo = f"reporte_mod10_{escenario}_{politica}.xlsx"
         ruta_salida = os.path.join(DATOS_DIR, nombre_archivo)
-
         with pd.ExcelWriter(ruta_salida) as writer:
             for region, df_out in resultados_excel.items():
-                # sheet_name máx 31 caracteres
-                sheet_name = region[:31]
-                df_out.to_excel(writer, sheet_name=sheet_name, index=True)
+                df_out.to_excel(writer, sheet_name=region[:31], index=True)
+        print(f"\n[OK] Reporte detallado guardado en: {nombre_archivo}")
 
-        print(f"\nArchivo Excel guardado en:\n  {ruta_salida}")
-        print(f"Cada hoja tiene {PROJECT_LIFETIME_MONTHS} filas (toda la vida útil del proyecto).")
+    # ------------------------------------------------------------------------
+    # 7) GENERAR ANNUAL_SAVINGS.XLSX AUTOMÁTICO
+    # ------------------------------------------------------------------------
+    print("\n" + "=" * 100)
+    print("   GENERANDO ARCHIVO MAESTRO: ANNUAL_SAVINGS.XLSX")
+    print("=" * 100)
+
+    if ahorros_anuales_dict:
+        # Crear DataFrame consolidado (index=anio, columnas=regiones)
+        df_savings = pd.DataFrame(ahorros_anuales_dict)
+        
+        # Mapeo de nombres de columnas (Español -> Inglés)
+        mapa_regiones = {
+            "Norte": "North",
+            "Centro": "Center",
+            "Sur": "South"
+        }
+        df_savings.rename(columns=mapa_regiones, inplace=True)
+        
+        # Ajustar índice Year: El modelo usa anio 1, 2... Annual Savings usa 0, 1...
+        # Asumimos que anio 1 del modelo = Year 0
+        df_savings.index = df_savings.index - 1
+        df_savings.index.name = "Year"
+        df_savings.reset_index(inplace=True)
+        
+        # Ordenar columnas
+        cols_final = ["Year", "North", "Center", "South"]
+        # Filtrar solo las que existan (por seguridad)
+        cols_existentes = [c for c in cols_final if c in df_savings.columns]
+        df_savings = df_savings[cols_existentes]
+
+        ruta_savings = os.path.join(DATOS_DIR, FILE_ANNUAL_SAVINGS)
+        
+        try:
+            df_savings.to_excel(ruta_savings, index=False)
+            print(f"✓ Archivo generado exitosamente en:\n  {ruta_savings}")
+            print(f"✓ Contiene datos para {len(df_savings)} años (Year 0 a {len(df_savings)-1}).")
+            print("✓ Ahora puedes correr el Módulo 7 y usará estos nuevos datos.")
+        except Exception as e:
+            print(f"✗ Error guardando annual_savings.xlsx: {e}")
+            print("  (Verifica que el archivo no esté abierto en Excel)")
+    else:
+        print("✗ No se calcularon ahorros. Revisa los pasos anteriores.")
 
     print("\n" + "=" * 100)
-    print("FIN DE REPORTE MÓDULO 10")
+    print("FIN DE EJECUCIÓN")
     print("=" * 100 + "\n")
 
 
