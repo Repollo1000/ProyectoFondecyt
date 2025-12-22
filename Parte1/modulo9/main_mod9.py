@@ -10,10 +10,13 @@ try:
     from .. import parametros_globales as p_g
     from . import modulo9 as m9
     from ..modulo7 import modulo7 as m7
+    from ..modulo1_3 import modulo1_3 as m_datos
 except ImportError:
     import parametros_globales as p_g
     import modulo9 as m9
     from modulo7 import modulo7 as m7
+    # Fallback local
+    from Parte1.modulo1_3 import modulo1_3 as m_datos
 
 # =============================================================================
 # FUNCIONES DE UTILERÍA (Menú y Visualización)
@@ -34,15 +37,15 @@ def solicitar_escenario_usuario() -> tuple[str, str]:
     
     eleccion = input(">> Ingrese el número de su opción (1, 2 o 3): ").strip()
     
-    # Mapa de opciones a códigos que entiende modulo9.py
+    # Usamos claves estándar "CN", "SR", "AT"
     opciones = {
-        "1": ("ALTO", "Alto (CN)"),
-        "2": ("MEDIO", "Medio (SR)"),
-        "3": ("BAJO", "Bajo (AT)")
+        "1": ("CN", "Alto (CN)"),
+        "2": ("SR", "Medio (SR)"),
+        "3": ("AT", "Bajo (AT)")
     }
     
     # Si la entrada no es válida, usamos MEDIO por defecto
-    seleccion = opciones.get(eleccion, ("MEDIO", "Medio (SR)"))
+    seleccion = opciones.get(eleccion, ("SR", "Medio (SR)"))
     
     if eleccion not in opciones:
         print(f"\n[!] Opción '{eleccion}' no reconocida. Usando '{seleccion[1]}' por defecto.")
@@ -90,17 +93,26 @@ def main():
     # --- PASO 1: OBTENER DATOS DE MÓDULO 7 (HOGARES) ---
     print("\n>>> PASO 1: Ejecutando simulación de adopción (Módulo 7)...")
     res_m7 = m7.simulate_system(**p_g.MOD7_VARIABLES_INICIALES)
-    t_sim = res_m7[0]
     households = res_m7[2]  # Matriz (T, 3)
     
-    # --- PASO 2: RECOLECCIÓN DE DATOS DE ENTRADA MÓDULO 9 ---
+    # --- PASO 2: RECOLECCIÓN DE DATOS DE ENTRADA ---
     print("\n>>> PASO 2: Cargando datos externos (Excel/CSV)...")
     
-    # 2.1 Cargar Factores según la elección del usuario
-    tiempos_em, factores = m9.cargar_factor_emision(codigo_escenario)
+    # 2.1 Cargar Factores usando MODULO 1_3
+    # Obtenemos ruta desde parámetros globales
+    ruta_emisiones = p_g.MOD9_RUTAS["emission_factor_file"]
+    print(f"   -> Leyendo emisiones desde: {ruta_emisiones}")
+    
+    # Llamada al nuevo gestor de datos (devuelve DataFrame)
+    df_emisiones = m_datos.obtener_emisiones(codigo_escenario, ruta_emisiones)
+    
+    # Extraemos vectores numpy para el cálculo matemático
+    tiempos_em = df_emisiones["tiempo"].values
+    factores = df_emisiones["factor_emision"].values
+
     mostrar_factores(tiempos_em, factores, f"Factores Escenario {nombre_escenario}")
 
-    # 2.2 Cargar Perfil de Consumo
+    # 2.2 Cargar Perfil de Consumo (Sigue siendo específico de m9)
     perfil_consumo = m9.cargar_perfil_consumo_mensual()
     mostrar_consumo_mensual(perfil_consumo)
 

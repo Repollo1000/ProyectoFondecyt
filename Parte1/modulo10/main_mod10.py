@@ -12,12 +12,13 @@ from prettytable import PrettyTable
 # ============================================================================
 try:
     from .. import parametros_globales as p_g
-    from ..modulo1 import modulo1
+    # --- CAMBIO IMPORTANTE: Usamos el nuevo gestor modulo1_3 ---
+    from ..modulo1_3 import modulo1_3 as m_datos 
     from . import modulo10 as m10
 except ImportError:
-    # Fallback si se ejecuta directamente dentro de Parte1/modulo10
+    # Fallback si se ejecuta directamente o rutas alternativas
     import parametros_globales as p_g
-    from Parte1.modulo1 import modulo1
+    from Parte1.modulo1_3 import modulo1_3 as m_datos
     import modulo10 as m10
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -26,7 +27,7 @@ DATOS_DIR = os.path.join(BASE_DIR, 'Datos')
 FILE_CONSUMO = "curva_de_carga.xlsx"
 FILE_GENERACION = "Factor_capacidad_solar.csv"
 FILE_PRECIOS = "precio_electricidad_vf.xlsx"
-FILE_ANNUAL_SAVINGS = "annual_savings.xlsx"  # Nombre del archivo de salida automático
+FILE_ANNUAL_SAVINGS = "annual_savings.xlsx"
 
 
 # ============================================================================
@@ -84,7 +85,10 @@ def main():
     escenario = mapa_esc[op_precio]
 
     try:
-        df_precios = modulo1.obtener_precios(escenario, path_precios)
+        # --- CAMBIO: Usamos m_datos (el nuevo gestor) en vez de modulo1 ---
+        print(f"   -> Cargando precios desde: {path_precios} (Escenario: {escenario})")
+        df_precios = m_datos.obtener_precios(escenario, path_precios)
+        
         # Buscar una columna en USD
         col_usd = next((c for c in df_precios.columns if "USD" in c.upper()), None)
         if not col_usd:
@@ -112,19 +116,13 @@ def main():
     }
     politica = mapa_pol[op_pol]
 
-    # Mapeo nombres columnas de ingreso/utilidad para reporte visual
+    # Etiquetas visuales
     if politica == "net_billing":
-        col_ingreso = "ingreso_nb"
-        col_utilidad = "utilidad_nb"
-        nombre_politica_pretty = "Net Billing"
+        col_ingreso, col_utilidad, nombre_politica_pretty = "ingreso_nb", "utilidad_nb", "Net Billing"
     elif politica == "net_metering":
-        col_ingreso = "ingreso_nm"
-        col_utilidad = "utilidad_nm"
-        nombre_politica_pretty = "Net Metering"
+        col_ingreso, col_utilidad, nombre_politica_pretty = "ingreso_nm", "utilidad_nm", "Net Metering"
     else:
-        col_ingreso = "ingreso_fit"
-        col_utilidad = "utilidad_fit"
-        nombre_politica_pretty = "Feed-in Tariff"
+        col_ingreso, col_utilidad, nombre_politica_pretty = "ingreso_fit", "utilidad_fit", "Feed-in Tariff"
 
     # ------------------------------------------------------------------------
     # 3) POTENCIAS INSTALADAS (PVGP)
@@ -149,10 +147,7 @@ def main():
     # 4.2 Resumen mensual por región (año típico)
     resumen_fisico = m10.resumir_balance_mensual_df(df_balance_horario)
 
-    # Diccionario para acumular resultados por región y guardarlos en Excel
     resultados_excel = {}
-    
-    # Diccionario para acumular los ahorros anuales (para annual_savings.xlsx)
     ahorros_anuales_dict = {}
 
     # ------------------------------------------------------------------------
@@ -162,19 +157,18 @@ def main():
     print(f"REPORTE FINAL: RESUMEN MENSUAL ({nombre_politica_pretty}) - Escenario: {escenario.upper()}")
     print("=" * 100)
 
-    # Extender precios si es necesario (repetir último valor si faltan datos)
+    # Extender precios si es necesario
     if len(df_precios) < PROJECT_LIFETIME_MONTHS:
         print(f"\n⚠ Aviso: df_precios ({len(df_precios)}) es más corto que la vida útil ({PROJECT_LIFETIME_MONTHS}). Se rellenará con el último valor.")
         ultimo_precio = df_precios.iloc[-1]
         filas_faltantes = PROJECT_LIFETIME_MONTHS - len(df_precios)
-        # Crear dataframe de relleno
+        
+        # Relleno simple
         df_relleno = pd.DataFrame([ultimo_precio] * filas_faltantes)
-        # Ajustar índice para continuar
-        df_relleno.index = range(len(df_precios) + 1, PROJECT_LIFETIME_MONTHS + 1) # (ajuste simple)
-        # Concatenar (en realidad df_precios se usa por mapeo de 'periodo', hay que asegurar que la columna periodo siga)
-        # Manera simplificada: Re-indexar df_precios
+        df_relleno.index = range(len(df_precios) + 1, PROJECT_LIFETIME_MONTHS + 1)
+        
+        # Concatenar
         df_precios_ext = pd.concat([df_precios, df_relleno], ignore_index=True)
-        # Recalcular columna periodo si existe, o asumir índice
         if "periodo" in df_precios_ext.columns:
              df_precios_ext["periodo"] = np.arange(1, len(df_precios_ext) + 1)
         df_precios = df_precios_ext
@@ -186,7 +180,7 @@ def main():
         print(f"\n>>> REGIÓN: {region}")
 
         # df_fisico_reg: año típico por mes
-        df_fisico_reg = resumen_fisico[region].copy()   # index = mes
+        df_fisico_reg = resumen_fisico[region].copy()
         df_fisico_reg = df_fisico_reg.reset_index()     # columna 'mes'
         n_base = len(df_fisico_reg)                     # 12
 
@@ -209,7 +203,7 @@ def main():
             politica=politica,
         )
 
-        # Seleccionamos columnas y renombramos
+        # Selección de columnas
         df_econ_selected = df_econ_reg[
             ["precio_usd_kwh", "inyeccion", "demanda_red", col_ingreso, "costo_compra_usd", col_utilidad]
         ].rename(columns={
@@ -228,16 +222,15 @@ def main():
         # NUEVO: CÁLCULO DE AHORRO REAL PARA ANNUAL_SAVINGS
         # Ahorro = (Autoconsumo * Precio) + Ingreso_Venta
         # --------------------------------------------------------------------
-        # Nota: autoconsumo está en kWh. ingreso_usd ya está en $.
         df_salida_reg["ahorro_total_usd"] = (
             df_salida_reg["autoconsumo"] * df_salida_reg["precio_usd_kwh"]
         ) + df_salida_reg["ingreso_usd"]
         
-        # Agrupar por año para obtener el total anual
+        # Agrupar por año
         ahorro_anual_serie = df_salida_reg.groupby("anio")["ahorro_total_usd"].sum()
         ahorros_anuales_dict[region] = ahorro_anual_serie
 
-        # Reordenamos columnas para el Excel de reporte
+        # Reordenamos columnas
         cols_orden = [
             "anio", "mes",
             "gen", "demanda", "autoconsumo", "inyeccion", "demanda_red", "dif_total",
@@ -250,7 +243,6 @@ def main():
         resultados_excel[region] = df_salida_reg
 
         # ------------------ TABLA PRETTY (AÑO 1) ------------------
-        # ... (solo visualización, sin cambios mayores)
         df_view = df_salida_reg.iloc[:12]
         t = PrettyTable()
         t.field_names = ["Mes", "Precio", "Autocon($)", "Ingreso($)", "AhorroTotal($)"]
@@ -284,26 +276,20 @@ def main():
     print("=" * 100)
 
     if ahorros_anuales_dict:
-        # Crear DataFrame consolidado (index=anio, columnas=regiones)
+        # Crear DataFrame consolidado
         df_savings = pd.DataFrame(ahorros_anuales_dict)
         
-        # Mapeo de nombres de columnas (Español -> Inglés)
-        mapa_regiones = {
-            "Norte": "North",
-            "Centro": "Center",
-            "Sur": "South"
-        }
+        # Mapeo a Inglés
+        mapa_regiones = { "Norte": "North", "Centro": "Center", "Sur": "South" }
         df_savings.rename(columns=mapa_regiones, inplace=True)
         
-        # Ajustar índice Year: El modelo usa anio 1, 2... Annual Savings usa 0, 1...
-        # Asumimos que anio 1 del modelo = Year 0
+        # Ajustar índice Year (base 0)
         df_savings.index = df_savings.index - 1
         df_savings.index.name = "Year"
         df_savings.reset_index(inplace=True)
         
         # Ordenar columnas
         cols_final = ["Year", "North", "Center", "South"]
-        # Filtrar solo las que existan (por seguridad)
         cols_existentes = [c for c in cols_final if c in df_savings.columns]
         df_savings = df_savings[cols_existentes]
 

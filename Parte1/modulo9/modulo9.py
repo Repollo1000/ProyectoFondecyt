@@ -3,7 +3,7 @@
 modulo9.py — Módulo de Emisiones (Solo Sección 9.2: Consumo de Electricidad).
 
 Flujo:
-1. Recolección de datos (Factores y Curva de Carga).
+1. Recolección de datos (Solo Perfil de Consumo; Emisiones vienen de fuera).
 2. Agrupación de consumo horario a mensual.
 3. Cálculo de emisiones por consumo (Hogares * Consumo * Factor).
 4. Acumulación anual.
@@ -20,45 +20,8 @@ except ImportError:
 
 
 # =============================================================================
-# 1. RECOLECCIÓN DE DATOS
+# 1. RECOLECCIÓN DE DATOS (Perfil de Consumo)
 # =============================================================================
-
-def cargar_factor_emision(scenario: str | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Lee factor_emisionv2.csv (Mensual).
-    Retorna: tiempos, factores [tCO2/MWh].
-    """
-    if scenario is None:
-        scenario = p_g.MOD9_VARIABLES_INICIALES["default_emission_scenario"]
-
-    # Mapeo de escenario
-    scenario_key = str(scenario).upper().strip()
-    # Mapea lo que el usuario escribe -> Nombre interno de columna
-    map_scenarios = {
-        "CN": "CN", "ALTO": "CN", 
-        "SR": "SR", "MEDIO": "SR", 
-        "AT": "AT", "BAJO": "AT"
-    }
-    target_col = map_scenarios.get(scenario_key, "CN")
-
-    csv_path = p_g.MOD9_RUTAS["emission_factor_file"]
-    
-    # Leer CSV (separador ';', saltar fila unidades)
-    df_raw = pd.read_csv(csv_path, sep=";")
-    df = df_raw.drop(index=0).copy()
-
-    # Renombrar por posición para evitar errores de nombre (SR scenario vs SR(medio))
-    cols = df.columns
-    df = df.rename(columns={cols[0]: "tiempo", cols[1]: "CN", cols[2]: "SR", cols[3]: "AT"})
-
-    # Convertir a numérico
-    for c in ["tiempo", "CN", "SR", "AT"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    
-    df = df.dropna(subset=["tiempo", target_col])
-    
-    return df["tiempo"].to_numpy(dtype=float), df[target_col].to_numpy(dtype=float)
-
 
 def cargar_perfil_consumo_mensual() -> pd.DataFrame:
     """
@@ -154,5 +117,5 @@ def acumular_anualmente(datos_mensuales: np.ndarray) -> np.ndarray:
     
     return anual
 
-__all__ = ["cargar_factor_emision", "cargar_perfil_consumo_mensual", 
+__all__ = ["cargar_perfil_consumo_mensual", 
            "calcular_emisiones_consumo", "acumular_anualmente"]
