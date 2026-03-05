@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
 def calcular_utilidad_ev_completa(params, stocks_ev, region_idx, anio_actual):
-    # --- 1. INFRAESTRUCTURA ---
-    infra_factor = stocks_ev.get('num_chargers_ev', 0.0) * params['rel_importance_infra'][region_idx]
+    # --- 1. INFRAESTRUCTURA (Sincronización Directa Vensim) ---
+    # Recibe el factor ya escalado (Cargadores * Importancia) desde el orquestador
+    infra_factor = stocks_ev.get('num_chargers_ev', 0.0)
     
     # --- DATOS BASE ---
     Discount_rate = 0.06

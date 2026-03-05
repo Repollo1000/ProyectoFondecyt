@@ -24,7 +24,7 @@ UTILIDAD_EV_PARAMETROS = {
     # --- Tiempo de Carga (Charging Time) ---
     "initial_charging_time_ev": 82.88,
     "ev_charge_time_improve_rate": 0.0670057,
-    "rel_importance_charging_time": np.array([-4.956, -5.12323, -4.852]), # Ajusta según tu Vensim
+    "rel_importance_charging_time": np.array([-2.84744, -5.12323, -2.91483]), # Ajusta según tu Vensim
     
     # --- Infraestructura ---
     "inital_quantity_public_charges": np.array([39, 340, 84]),
