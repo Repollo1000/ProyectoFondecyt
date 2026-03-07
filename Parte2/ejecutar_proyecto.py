@@ -14,6 +14,7 @@ try:
     util_icev = importar_modulo("utilidad_icev", "utilidad_icev_mod/utilidad_icev.py")
     demanda = importar_modulo("demanda_adopcion_vehiculos", "demanda_adopcion_vehiculos_mod/demanda_adopcion_vehiculos.py")
     politicas = importar_modulo("policy_cost", "policy_cost_mod/policy_cost.py")
+    estrategias = importar_modulo("estrategias_carga", "estrategias_carga_mod/estrategias_carga.py")
     import parametros_globales_parte2 as params_global
 except Exception as e:
     print(f"\n❌ Error: {e}"); sys.exit(1)
@@ -45,7 +46,8 @@ def mostrar_menu():
     print("3. Módulo Utilidad ICEV      (Utilidad Total, TCO, Range, Refuelling, FS)")
     print("4. Módulo Emisiones de CO2   (Emisiones ICEV, EV, Totales, CO2 Evitado)")
     print("5. Módulo Políticas y Costos (Base CS, Taxes, Subsidios Cum, Cost Pol CS)")
-    print("6. Salir")
+    print("6. Módulo Estrategias Horarias (Peak Demanda Red Eléctrica en MW)")
+    print("7. Salir")
     return input("\nSeleccione opción: ")
 
 def ejecutar_motor(opcion):
@@ -70,9 +72,8 @@ def ejecutar_motor(opcion):
     cum_subsidy_cost = np.zeros(3)
     cum_tax_income = np.zeros(3)
     cum_cs_policy_cost = np.zeros(3)
-    cost_per_cs = 12605.0 # Valor original (Positivo, la resta lo hará negativo)
+    cost_per_cs = 12605.0 
     
-    # PARÁMETROS MÓDULO 5
     ev_subsidies_percent = 0.0 
     icev_additional_taxes = 0.015
     base_cs_per_ev_rate = 0.033
@@ -81,6 +82,7 @@ def ejecutar_motor(opcion):
     
     regiones = ['Norte', 'Centro', 'Sur']
 
+    # --- DEFINICIÓN DE ENCABEZADOS DE TABLA ---
     if opcion == '1':
         h = f"{'Año':<5} | {'Región':<6} | {'Población':>10} | {'Stock EV':>9} | {'Stock ICE':>10} | {'Demand':>9} | {'MS EV':>9} | {'MS ICE':>9} | {'Sales EV':>9} | {'Sales ICE':>9}"
     elif opcion == '2':
@@ -91,11 +93,14 @@ def ejecutar_motor(opcion):
         h = f"{'Año':<5} | {'Región':<6} | {'Emi ICE (t)':>12} | {'Emi EV (t)':>11} | {'Emi Total (t)':>13} | {'CO2 Evitado (t)':>15}"
     elif opcion == '5':
         h = f"{'Año':<5} | {'Región':<6} | {'Base CS EV':>12} | {'Tax ICEV ($)':>14} | {'Subsidy Cum ($)':>15} | {'Cost Pol CS ($)':>16}"
+    elif opcion == '6':
+        h = f"{'Año':<5} | {'Región':<6} | {'Stock EV':>10} | {'Peak Dumb (MW)':>16} | {'Peak Smart (MW)':>16} | {'Peak Diurna (MW)':>17}"
 
     ancho_linea = len(h)
     print("\n" + h)
     print("=" * ancho_linea)
 
+    # --- IMPRESIÓN DEL AÑO BASE 2023 ---
     for i in range(3):
         if opcion == '1':
             print(f"{2023:<5} | {regiones[i]:<6} | {pop[i]:>10.0f} | {ev_s[i]:>9.0f} | {ice_s[i]:>10.0f} | {'---':>9} | {'---':>9} | {'---':>9} | {'---':>9} | {'---':>9}")
@@ -103,9 +108,12 @@ def ejecutar_motor(opcion):
             print(f"{2023:<5} | {regiones[i]:<6} | " + " | ".join(["---"] * (len(h.split('|')) - 2)))
         elif opcion == '5':
             print(f"{2023:<5} | {regiones[i]:<6} | {base_cargadores_ev[i]:>12.1f} | {'0':>14} | {'0':>15} | {'0':>16}")
-            
+        elif opcion == '6':
+            print(f"{2023:<5} | {regiones[i]:<6} | {ev_s[i]:>10.0f} | {'---':>16} | {'---':>16} | {'---':>17}")
+
     print("-" * ancho_linea)
 
+    # --- BUCLE PRINCIPAL DE SIMULACIÓN (2024 - 2050) ---
     for anio in range(2024, 2051):
         
         stock_ev_actual = ev_s.copy()
@@ -203,7 +211,9 @@ def ejecutar_motor(opcion):
                 print(f"{anio:<5} | {regiones[i]:<6} | {rep['total_ice_ton']:>12.1f} | {rep['total_ev_ton']:>11.1f} | {emi_tot:>13.1f} | {rep['co2_evitado_anio']:>15.1f}")
             elif opcion == '5':
                 print(f"{anio:<5} | {regiones[i]:<6} | {next_base_cargadores[i]:>12.1f} | {cum_tax_income[i]:>14.0f} | {cum_subsidy_cost[i]:>15.0f} | {cum_cs_policy_cost[i]:>16.0f}")
-
+            elif opcion == '6':
+                impacto = estrategias.calcular_impacto_red_mw(next_ev_s[i])
+                print(f"{anio:<5} | {regiones[i]:<6} | {next_ev_s[i]:>10.0f} | {impacto['peak_dumb']:>16.2f} | {impacto['peak_smart']:>16.2f} | {impacto['peak_diurna']:>17.2f}")
         print("-" * ancho_linea)
 
         pop, ev_s, ice_s = next_pop, next_ev_s, next_ice_s
@@ -211,8 +221,8 @@ def ejecutar_motor(opcion):
 if __name__ == "__main__":
     while True:
         opt = mostrar_menu()
-        if opt == '6': break
-        if opt in ['1', '2', '3', '4', '5']:
+        if opt == '7': break
+        if opt in ['1', '2', '3', '4', '5', '6']:
             ejecutar_motor(opt)
         else:
             print("Opción no válida.")
